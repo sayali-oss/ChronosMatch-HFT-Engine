@@ -1,66 +1,106 @@
+
 import asyncio
 import time
+import sys
+from pathlib import Path
 
-from order_generator import generate_order
+# Add the project root to Python's module search path.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from firehose.order_generator import generate_order
+from mmap_ring_buffer import MMapRingBuffer
 
 
 async def firehose(order_rate=1000, duration=5):
     """
-    Generate trading orders asynchronously and measure throughput.
+    Generate trading orders and pass them through the mmap ring buffer.
 
-    Parameters:
-        order_rate: Target number of orders to generate per second.
-        duration: Duration of the benchmark in seconds.
+    order_rate: Target order count per second (used to calculate total count).
+    duration: Duration parameter used to calculate total order count.
     """
 
     total_orders = order_rate * duration
 
+    # Create a 1 KB ring buffer.
+    ring = MMapRingBuffer(size=1024)
+
+    generated = 0
+    consumed = 0
+
     print("\n========================================")
     print("       CHRONOSMATCH MARKET FIREHOSE")
     print("========================================")
-    print(f"Target rate  : {order_rate:,} orders/sec")
-    print(f"Duration     : {duration} seconds")
-    print(f"Target orders: {total_orders:,}")
+    print(f"Target order count: {total_orders:,}")
+    print(f"Record size       : {ring.msg_size} bytes")
     print("----------------------------------------")
 
     start_ns = time.perf_counter_ns()
 
-    generated_orders = 0
+    try:
+        for order_id in range(1, total_orders + 1):
+            order = generate_order(order_id)
 
-    for order_id in range(1, total_orders + 1):
+            # Write the order into the ring buffer.
+            # If full, consume one order and retry.
+            while not ring.write_order(order):
+                recovered = ring.read_order()
 
-        # Generate one order.
-        order = generate_order(order_id)
+                if recovered is not None:
+                    consumed += 1
 
-        # The order will be sent to the mmap buffer later.
-        # For now, we simply generate it.
+            generated += 1
 
-        generated_orders += 1
+            # Give the asyncio event loop an opportunity to run.
+            await asyncio.sleep(0)
 
-        # Give the asyncio event loop a chance to run.
-        await asyncio.sleep(0)
+            # Consume one order and verify its ID.
+            recovered = ring.read_order()
 
-    end_ns = time.perf_counter_ns()
+            if recovered is not None:
+                consumed += 1
 
-    elapsed_ns = end_ns - start_ns
-    elapsed_seconds = elapsed_ns / 1_000_000_000
+                assert recovered["order_id"] == order["order_id"], (
+                    f"Order ID mismatch: expected {order['order_id']}, "
+                    f"got {recovered['order_id']}"
+                )
 
-    actual_rate = generated_orders / elapsed_seconds
+        # Consume any remaining records.
+        while True:
+            recovered = ring.read_order()
 
-    print("----------------------------------------")
-    print(f"Orders generated : {generated_orders:,}")
-    print(f"Time taken       : {elapsed_seconds:.6f} seconds")
-    print(f"Actual throughput: {actual_rate:,.2f} orders/sec")
-    print("========================================\n")
+            if recovered is None:
+                break
+
+            consumed += 1
+
+        elapsed_seconds = (
+            time.perf_counter_ns() - start_ns
+        ) / 1_000_000_000
+
+        print(f"Orders generated : {generated:,}")
+        print(f"Orders consumed  : {consumed:,}")
+        print(f"Time taken       : {elapsed_seconds:.6f} seconds")
+        print(
+            f"Throughput       : "
+            f"{generated / elapsed_seconds:,.2f} orders/sec"
+        )
+
+        if generated != consumed:
+            raise RuntimeError(
+                f"Order count mismatch: generated={generated}, "
+                f"consumed={consumed}"
+            )
+
+        print("Status           : PASS")
+        print("========================================\n")
+
+    finally:
+        ring.close()
 
 
 async def main():
-
-    # Day 1 benchmark
-    await firehose(
-        order_rate=1000,
-        duration=5
-    )
+    await firehose(order_rate=1000, duration=5)
 
 
 if __name__ == "__main__":
