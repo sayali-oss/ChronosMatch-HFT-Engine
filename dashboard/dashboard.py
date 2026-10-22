@@ -27,14 +27,22 @@ def main(stdscr):
             data = {"orders": 0, "buffer": 0, "latency": 0.0}
 
         stdscr.clear()
-        stdscr.addstr(0, 0, "ChronosMatch Dashboard (Day 7)")
+        stdscr.addstr(0, 0, "ChronosMatch Dashboard (Day 8)")
         stdscr.addstr(2, 0, f"Orders received: {data['orders']}")
         stdscr.addstr(3, 0, f"Buffer usage: {data['buffer']}%")
         stdscr.addstr(4, 0, f"Latency: {data['latency']:.2f} ms")
 
+        # --- Alerts Section ---
+        alert_line = 6
+        if data['latency'] > 2.5:
+            stdscr.addstr(alert_line, 0, "⚠ High Latency!", curses.A_BOLD)
+            alert_line += 1
+        if data['buffer'] > 80:
+            stdscr.addstr(alert_line, 0, "⚠ Buffer Overflow Risk!", curses.A_BOLD)
+
         stdscr.refresh()
         time.sleep(1)
-
+      
 curses.wrapper(main)
 
 
