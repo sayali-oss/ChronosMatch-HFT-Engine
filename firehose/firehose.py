@@ -10,23 +10,40 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from firehose.order_generator import generate_order
 from mmap_ring_buffer import MMapRingBuffer
+from matching_engine import MatchingEngine
 
 
 async def firehose(order_rate=1000, duration=5):
     """
-    Generate trading orders and pass them through the mmap ring buffer.
-
-    order_rate: Target order count per second (used to calculate total count).
-    duration: Duration parameter used to calculate total order count.
+    Generate orders, transfer them through the ring buffer,
+    and process them using the limit order matching engine.
     """
 
     total_orders = order_rate * duration
-
-    # Create a 1 KB ring buffer.
     ring = MMapRingBuffer(size=1024)
+    engine = MatchingEngine()
 
     generated = 0
     consumed = 0
+    expected_order_id = 1
+
+    def process_order(order):
+        nonlocal consumed, expected_order_id
+
+        if order is None:
+            return
+
+        # Verify FIFO order from the ring buffer.
+        assert order["order_id"] == expected_order_id, (
+            f"Expected order {expected_order_id}, "
+            f"got {order['order_id']}"
+        )
+
+        expected_order_id += 1
+        consumed += 1
+
+        # Send the recovered order to the matching engine.
+        engine.add_order(order)
 
     print("\n========================================")
     print("       CHRONOSMATCH MARKET FIREHOSE")
@@ -41,55 +58,49 @@ async def firehose(order_rate=1000, duration=5):
         for order_id in range(1, total_orders + 1):
             order = generate_order(order_id)
 
-            # Write the order into the ring buffer.
-            # If full, consume one order and retry.
+            # Write the order; free one slot and retry if full.
             while not ring.write_order(order):
-                recovered = ring.read_order()
-
-                if recovered is not None:
-                    consumed += 1
+                process_order(ring.read_order())
 
             generated += 1
 
-            # Give the asyncio event loop an opportunity to run.
+            # Allow the asyncio event loop to run.
             await asyncio.sleep(0)
 
-            # Consume one order and verify its ID.
-            recovered = ring.read_order()
+            # Consume and match one order.
+            process_order(ring.read_order())
 
-            if recovered is not None:
-                consumed += 1
-
-                assert recovered["order_id"] == order["order_id"], (
-                    f"Order ID mismatch: expected {order['order_id']}, "
-                    f"got {recovered['order_id']}"
-                )
-
-        # Consume any remaining records.
+        # Drain any remaining orders.
         while True:
             recovered = ring.read_order()
 
             if recovered is None:
                 break
 
-            consumed += 1
+            process_order(recovered)
 
         elapsed_seconds = (
             time.perf_counter_ns() - start_ns
         ) / 1_000_000_000
 
+        open_buy = len(engine.buy_orders)
+        open_sell = len(engine.sell_orders)
+
         print(f"Orders generated : {generated:,}")
         print(f"Orders consumed  : {consumed:,}")
+        print(f"Trades executed  : {len(engine.trades):,}")
+        print(f"Open BUY orders  : {open_buy:,}")
+        print(f"Open SELL orders : {open_sell:,}")
         print(f"Time taken       : {elapsed_seconds:.6f} seconds")
         print(
             f"Throughput       : "
             f"{generated / elapsed_seconds:,.2f} orders/sec"
         )
 
-        if generated != consumed:
+        if generated != total_orders or consumed != total_orders:
             raise RuntimeError(
                 f"Order count mismatch: generated={generated}, "
-                f"consumed={consumed}"
+                f"consumed={consumed}, expected={total_orders}"
             )
 
         print("Status           : PASS")
