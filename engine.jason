@@ -1,4 +1,4 @@
-{"orders": 120, "buffer": 45, "latency": 2.3}
-{"orders": 130, "buffer": 50, "latency": 1.8}
-{"orders": 140, "buffer": 55, "latency": 3.1}
-{"orders":200,"buffer":85,"latency":3.2}
+
+{{"orders":120,"buffer":45,"latency":1.4}
+{"orders":150,"buffer":76,"latency":2.8}
+{"orders":200,"buffer":92,"latency":4.7}
