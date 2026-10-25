@@ -86,9 +86,7 @@ def test_sell_orders_are_inserted_in_ascending_price_order():
     engine.add_order(make_order(2, "SELL", 100, 3))
     engine.add_order(make_order(3, "SELL", 102, 4))
 
-    assert [o["price"] for o in engine.sell_orders] == [
-        100, 102, 105
-    ]
+    assert [o["price"] for o in engine.sell_orders] == [100, 102, 105]
 
 
 def test_sell_orders_with_equal_prices_keep_fifo_priority():
@@ -130,7 +128,6 @@ def test_order_book_shows_best_prices_first():
     assert [o["price"] for o in book["SELL"]] == [108, 110]
 
 
-
 def test_duplicate_order_id_is_rejected():
     engine = MatchingEngine()
 
@@ -140,7 +137,10 @@ def test_duplicate_order_id_is_rejected():
         engine.add_order(make_order(1, "SELL", 100, 5))
 
 
-@pytest.mark.parametrize("price", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize(
+    "price",
+    [float("nan"), float("inf"), float("-inf")],
+)
 def test_non_finite_price_is_rejected(price):
     engine = MatchingEngine()
 
@@ -172,7 +172,6 @@ def test_invalid_order_does_not_consume_order_id():
     with pytest.raises(ValueError):
         engine.add_order(make_order(1, "BUY", -100, 5))
 
-    # A valid order with the same ID should still be accepted.
     assert engine.add_order(make_order(1, "BUY", 100, 5)) == 5
     assert len(engine.buy_orders) == 1
 
@@ -192,3 +191,25 @@ def test_invalid_order_type_is_rejected():
 
     with pytest.raises(ValueError, match="dictionary"):
         engine.add_order(None)
+
+
+def test_partial_fill_preserves_fifo_priority_for_remaining_orders():
+    engine = MatchingEngine()
+
+    engine.add_order(make_order(1, "SELL", 100, 5))
+    engine.add_order(make_order(2, "SELL", 100, 3))
+
+    # Partially fill the first resting SELL order.
+    engine.add_order(make_order(3, "BUY", 100, 2))
+
+    assert engine.trades[0]["sell_order_id"] == 1
+    assert engine.sell_orders[0]["order_id"] == 1
+    assert engine.sell_orders[0]["remaining"] == 3
+    assert engine.sell_orders[1]["order_id"] == 2
+
+    # The first SELL order must retain FIFO priority.
+    engine.add_order(make_order(4, "BUY", 100, 2))
+
+    assert engine.trades[1]["sell_order_id"] == 1
+    assert engine.sell_orders[0]["order_id"] == 1
+    assert engine.sell_orders[0]["remaining"] == 1
