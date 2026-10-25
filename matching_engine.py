@@ -1,6 +1,10 @@
+
+import math
+
+
 class MatchingEngine:
     """
-    Simple Limit Order Book with price-time priority.
+    Limit Order Book with price-time priority.
 
     BUY orders match the lowest available SELL price.
     SELL orders match the highest available BUY price.
@@ -12,11 +16,16 @@ class MatchingEngine:
         self.sell_orders = []
         self.trades = []
         self.sequence = 0
+        self.order_ids = set()
 
     def add_order(self, order):
+        if not isinstance(order, dict):
+            raise ValueError("Order must be a dictionary")
+
         required = {
             "order_id", "side", "price", "quantity", "timestamp"
         }
+
         if not required.issubset(order):
             raise ValueError("Order is missing required fields")
 
@@ -27,28 +36,47 @@ class MatchingEngine:
 
         if side not in ("BUY", "SELL"):
             raise ValueError("side must be BUY or SELL")
-        if not isinstance(price, (int, float)) or isinstance(price, bool):
-            raise ValueError("price must be numeric")
-        if price <= 0:
-            raise ValueError("price must be positive")
+
+        if (
+            isinstance(price, bool)
+            or not isinstance(price, (int, float))
+            or not math.isfinite(price)
+            or price <= 0
+        ):
+            raise ValueError("price must be a finite positive number")
+
         if type(quantity) is not int or quantity <= 0:
             raise ValueError("quantity must be a positive integer")
+
         if type(order_id) is not int or order_id <= 0:
             raise ValueError("order_id must be a positive integer")
 
-        self.sequence += 1
+        if order_id in self.order_ids:
+            raise ValueError("Duplicate order_id")
+
+        timestamp = order["timestamp"]
+        if (
+            isinstance(timestamp, bool)
+            or not isinstance(timestamp, (int, float))
+            or not math.isfinite(timestamp)
+        ):
+            raise ValueError("timestamp must be finite and numeric")
+
         incoming = {
             **order,
             "remaining": quantity,
-            "sequence": self.sequence
+            "sequence": self.sequence + 1,
         }
+
+        # Register only after all validation succeeds.
+        self.sequence += 1
+        self.order_ids.add(order_id)
 
         if side == "BUY":
             self._match_buy(incoming)
         else:
             self._match_sell(incoming)
 
-        # Store any unfilled quantity in the appropriate book.
         if incoming["remaining"] > 0:
             book = (
                 self.buy_orders if side == "BUY"
@@ -61,11 +89,7 @@ class MatchingEngine:
 
     def _match_buy(self, buy):
         while buy["remaining"] > 0 and self.sell_orders:
-            # Best ask is the lowest-priced sell order.
-            best_sell = min(
-                self.sell_orders,
-                key=lambda o: (o["price"], o["sequence"])
-            )
+            best_sell = self.sell_orders[0]
 
             if buy["price"] < best_sell["price"]:
                 break
@@ -73,15 +97,11 @@ class MatchingEngine:
             self._execute_trade(buy, best_sell, best_sell["price"])
 
             if best_sell["remaining"] == 0:
-                self.sell_orders.remove(best_sell)
+                self.sell_orders.pop(0)
 
     def _match_sell(self, sell):
         while sell["remaining"] > 0 and self.buy_orders:
-            # Best bid is the highest-priced buy order.
-            best_buy = max(
-                self.buy_orders,
-                key=lambda o: (o["price"], -o["sequence"])
-            )
+            best_buy = self.buy_orders[0]
 
             if sell["price"] > best_buy["price"]:
                 break
@@ -89,12 +109,12 @@ class MatchingEngine:
             self._execute_trade(sell, best_buy, best_buy["price"])
 
             if best_buy["remaining"] == 0:
-                self.buy_orders.remove(best_buy)
+                self.buy_orders.pop(0)
 
     def _execute_trade(self, incoming, resting, execution_price):
         quantity = min(
             incoming["remaining"],
-            resting["remaining"]
+            resting["remaining"],
         )
 
         incoming["remaining"] -= quantity
@@ -112,11 +132,10 @@ class MatchingEngine:
                 else resting["order_id"]
             ),
             "price": execution_price,
-            "quantity": quantity
+            "quantity": quantity,
         }
 
         self.trades.append(trade)
-        print("TRADE:", trade)
 
     def _sort_books(self):
         self.buy_orders.sort(
@@ -129,15 +148,21 @@ class MatchingEngine:
     def get_order_book(self):
         return {
             "BUY": [
-                {k: o[k] for k in
-                 ("order_id", "price", "remaining")}
+                {
+                    "order_id": o["order_id"],
+                    "price": o["price"],
+                    "remaining": o["remaining"],
+                }
                 for o in self.buy_orders
             ],
             "SELL": [
-                {k: o[k] for k in
-                 ("order_id", "price", "remaining")}
+                {
+                    "order_id": o["order_id"],
+                    "price": o["price"],
+                    "remaining": o["remaining"],
+                }
                 for o in self.sell_orders
-            ]
+            ],
         }
 
 
@@ -149,7 +174,7 @@ if __name__ == "__main__":
         "side": "SELL",
         "price": 100.0,
         "quantity": 10,
-        "timestamp": 1
+        "timestamp": 1,
     })
 
     engine.add_order({
@@ -157,11 +182,11 @@ if __name__ == "__main__":
         "side": "BUY",
         "price": 101.0,
         "quantity": 4,
-        "timestamp": 2
+        "timestamp": 2,
     })
 
-    print("\nRemaining order book:")
+    print("Remaining order book:")
     print(engine.get_order_book())
 
-    print("\nAll trades:")
+    print("All trades:")
     print(engine.trades)
