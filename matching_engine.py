@@ -1,38 +1,67 @@
 
+import heapq
 import math
 
 
 class MatchingEngine:
     """
-    Limit Order Book with price-time priority.
+    Limit Order Book using heaps and price-time priority.
 
-    BUY orders match the lowest available SELL price.
-    SELL orders match the highest available BUY price.
-    Earlier orders at the same price get priority.
+    BUY orders:
+        Highest price first, then earliest arrival.
+
+    SELL orders:
+        Lowest price first, then earliest arrival.
+
+    The public buy_orders and sell_orders attributes return
+    price-time-sorted snapshots for compatibility with existing tests.
     """
 
     def __init__(self):
-        self.buy_orders = []
-        self.sell_orders = []
+        self._buy_heap = []
+        self._sell_heap = []
         self.trades = []
         self.sequence = 0
         self.order_ids = set()
 
+    @property
+    def buy_orders(self):
+        """Return BUY orders in price-time priority."""
+        return [
+            entry[2]
+            for entry in sorted(self._buy_heap)
+        ]
+
+    @property
+    def sell_orders(self):
+        """Return SELL orders in price-time priority."""
+        return [
+            entry[2]
+            for entry in sorted(self._sell_heap)
+        ]
+
     def add_order(self, order):
+        """Validate, match, and store an incoming order."""
+
         if not isinstance(order, dict):
             raise ValueError("Order must be a dictionary")
 
         required = {
-            "order_id", "side", "price", "quantity", "timestamp"
+            "order_id",
+            "side",
+            "price",
+            "quantity",
+            "timestamp",
         }
 
         if not required.issubset(order):
             raise ValueError("Order is missing required fields")
 
+        order_id = order["order_id"]
         side = order["side"]
         price = order["price"]
         quantity = order["quantity"]
-        order_id = order["order_id"]
+        timestamp = order["timestamp"]
 
         if side not in ("BUY", "SELL"):
             raise ValueError("side must be BUY or SELL")
@@ -54,7 +83,6 @@ class MatchingEngine:
         if order_id in self.order_ids:
             raise ValueError("Duplicate order_id")
 
-        timestamp = order["timestamp"]
         if (
             isinstance(timestamp, bool)
             or not isinstance(timestamp, (int, float))
@@ -77,41 +105,72 @@ class MatchingEngine:
         else:
             self._match_sell(incoming)
 
+        # Add any remaining quantity to its heap.
         if incoming["remaining"] > 0:
-            book = (
-                self.buy_orders if side == "BUY"
-                else self.sell_orders
-            )
-            book.append(incoming)
+            self._add_to_book(incoming)
 
-        self._sort_books()
         return incoming["remaining"]
 
+    def _add_to_book(self, order):
+        """Insert an order into the appropriate priority heap."""
+
+        if order["side"] == "BUY":
+            # Negative price makes the highest BUY price come first.
+            entry = (
+                -order["price"],
+                order["sequence"],
+                order,
+            )
+            heapq.heappush(self._buy_heap, entry)
+
+        else:
+            # Lowest SELL price comes first.
+            entry = (
+                order["price"],
+                order["sequence"],
+                order,
+            )
+            heapq.heappush(self._sell_heap, entry)
+
     def _match_buy(self, buy):
-        while buy["remaining"] > 0 and self.sell_orders:
-            best_sell = self.sell_orders[0]
+        """Match a BUY order against the best available SELL orders."""
+
+        while buy["remaining"] > 0 and self._sell_heap:
+            best_sell = self._sell_heap[0][2]
 
             if buy["price"] < best_sell["price"]:
                 break
 
-            self._execute_trade(buy, best_sell, best_sell["price"])
+            self._execute_trade(
+                buy,
+                best_sell,
+                best_sell["price"],
+            )
 
             if best_sell["remaining"] == 0:
-                self.sell_orders.pop(0)
+                heapq.heappop(self._sell_heap)
 
     def _match_sell(self, sell):
-        while sell["remaining"] > 0 and self.buy_orders:
-            best_buy = self.buy_orders[0]
+        """Match a SELL order against the best available BUY orders."""
+
+        while sell["remaining"] > 0 and self._buy_heap:
+            best_buy = self._buy_heap[0][2]
 
             if sell["price"] > best_buy["price"]:
                 break
 
-            self._execute_trade(sell, best_buy, best_buy["price"])
+            self._execute_trade(
+                sell,
+                best_buy,
+                best_buy["price"],
+            )
 
             if best_buy["remaining"] == 0:
-                self.buy_orders.pop(0)
+                heapq.heappop(self._buy_heap)
 
     def _execute_trade(self, incoming, resting, execution_price):
+        """Execute a trade and update the remaining quantities."""
+
         quantity = min(
             incoming["remaining"],
             resting["remaining"],
@@ -137,31 +196,25 @@ class MatchingEngine:
 
         self.trades.append(trade)
 
-    def _sort_books(self):
-        self.buy_orders.sort(
-            key=lambda o: (-o["price"], o["sequence"])
-        )
-        self.sell_orders.sort(
-            key=lambda o: (o["price"], o["sequence"])
-        )
-
     def get_order_book(self):
+        """Return a readable snapshot of the current order book."""
+
         return {
             "BUY": [
                 {
-                    "order_id": o["order_id"],
-                    "price": o["price"],
-                    "remaining": o["remaining"],
+                    "order_id": order["order_id"],
+                    "price": order["price"],
+                    "remaining": order["remaining"],
                 }
-                for o in self.buy_orders
+                for order in self.buy_orders
             ],
             "SELL": [
                 {
-                    "order_id": o["order_id"],
-                    "price": o["price"],
-                    "remaining": o["remaining"],
+                    "order_id": order["order_id"],
+                    "price": order["price"],
+                    "remaining": order["remaining"],
                 }
-                for o in self.sell_orders
+                for order in self.sell_orders
             ],
         }
 
@@ -188,5 +241,6 @@ if __name__ == "__main__":
     print("Remaining order book:")
     print(engine.get_order_book())
 
-    print("All trades:")
-    print(engine.trades)
+    print("\nTrades executed:")
+    for trade in engine.trades:
+        print(trade)
