@@ -2,8 +2,10 @@ import curses
 import json
 import time
 
-#Store latency history
 latency_history = []
+total_orders_processed = 0
+dashboard_refreshes = 0
+
 
 def read_latest_json(filename="engine.json"):
     try:
@@ -30,11 +32,13 @@ def get_status(buffer_usage, latency):
     elif buffer_usage > 70 or latency > 2.5:
         return "WARNING"
 
-    else:
-        return "NORMAL"
+    return "NORMAL"
 
 
 def main(stdscr):
+
+    global total_orders_processed
+    global dashboard_refreshes
 
     curses.curs_set(0)
     stdscr.nodelay(True)
@@ -50,17 +54,23 @@ def main(stdscr):
                 "buffer": 0,
                 "latency": 0.0
             }
-  latency_history.append(data["latency"])
+
+        dashboard_refreshes += 1
+
+        total_orders_processed += data["orders"]
+
+        latency_history.append(data["latency"])
 
         avg_latency = sum(latency_history) / len(latency_history)
         max_latency = max(latency_history)
         min_latency = min(latency_history)
 
-        
         status = get_status(
             data["buffer"],
             data["latency"]
         )
+
+        orders_per_second = data["orders"]
 
         stdscr.clear()
 
@@ -70,7 +80,7 @@ def main(stdscr):
             "========== ChronosMatch Dashboard =========="
         )
 
-        # Core Stats (Week 1)
+        # Core Metrics
         stdscr.addstr(
             2,
             0,
@@ -86,63 +96,50 @@ def main(stdscr):
         stdscr.addstr(
             4,
             0,
-            f"Latency         : {data['latency'\]:.2f} ms"
+            f"Latency         : {data['latency']:.2f} ms"
         )
 
-        # Status System (Week 2)
+        # Status System
         stdscr.addstr(
             6,
             0,
             f"Engine Status   : {status}"
         )
 
-        # Alerts Section
+        # Alerts
         stdscr.addstr(
             8,
             0,
             "============= ALERTS ============="
         )
 
-        row = 10
-
+        alert_row = 10
         alert_found = False
 
         if data["latency"] > 2.5:
-            stdscr.addstr(
-                row,
-                0,
-                "HIGH LATENCY ALERT"
-            )
-            row += 1
+            stdscr.addstr(alert_row, 0, "HIGH LATENCY ALERT")
+            alert_row += 1
             alert_found = True
 
         if data["buffer"] > 80:
-            stdscr.addstr(
-                row,
-                0,
-                "BUFFER OVERFLOW RISK"
-            )
-            row += 1
+            stdscr.addstr(alert_row, 0, "BUFFER OVERFLOW RISK")
+            alert_row += 1
             alert_found = True
 
         if not alert_found:
-            stdscr.addstr(
-                row,
-                0,
-                "System Operating Normally"
-            )
+            stdscr.addstr(alert_row, 0, "System Operating Normally")
 
-        # Week 3 Latency Panel
+        # Day 11 Latency Monitoring
         stdscr.addstr(
             15,
             0,
-            "========== LATENCY METRICS =========="
+            "========= LATENCY METRICS ========="
         )
 
         stdscr.addstr(
             17,
             0,
-            f"Current Latency : {data['latency'\]:.2f} ms"
+            f"Current Latency : {data['latency']:.2f} ms"
         )
 
         stdscr.addstr(
@@ -163,14 +160,38 @@ def main(stdscr):
             f"Minimum Latency : {min_latency:.2f} ms"
         )
 
+        # Day 12 Performance Metrics
         stdscr.addstr(
-            23,
+            22,
+            0,
+            "======= PERFORMANCE METRICS ======="
+        )
+
+        stdscr.addstr(
+            24,
+            0,
+            f"Total Orders Processed : {total_orders_processed}"
+        )
+
+        stdscr.addstr(
+            25,
+            0,
+            f"Orders Per Second      : {orders_per_second}"
+        )
+
+        stdscr.addstr(
+            26,
+            0,
+            f"Dashboard Refreshes    : {dashboard_refreshes}"
+        )
+
+        stdscr.addstr(
+            28,
             0,
             "Press CTRL+C to Exit"
         )
 
         stdscr.refresh()
-
         time.sleep(1)
 
 
