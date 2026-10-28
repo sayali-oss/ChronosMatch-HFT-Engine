@@ -109,6 +109,57 @@ The earlier recorded million-order throughput was 150,876.22 orders/sec. The lat
 - Million-order pipeline benchmark: PASS.
 - Git changes committed and pushed to `teammate1-dev`.
 
+
+## 6. Day 13 — Repeated Matching Engine Benchmark
+
+### Benchmark Configuration
+
+| Setting | Result |
+|---|---|
+| Orders per run | 10,000 |
+| Repetitions | 5 |
+| Random seed | 42 |
+| Benchmark result | PASS |
+| Outcome consistency | PASS |
+| Regression tests | 26 passed |
+
+### Throughput Results
+
+| Run | Throughput | Average Latency |
+|---:|---:|---:|
+| 1 | 317,582.31 orders/sec | 3.015 µs |
+| 2 | 282,961.47 orders/sec | 3.348 µs |
+| 3 | 301,587.25 orders/sec | 3.180 µs |
+| 4 | 256,038.02 orders/sec | 3.748 µs |
+| 5 | 315,326.11 orders/sec | 3.039 µs |
+| **Median** | **301,587.25 orders/sec** | **3.180 µs** |
+
+### Final-Run Latency and Order-Book Results
+
+| Metric | Result |
+|---|---:|
+| Elapsed time | 0.0317 s |
+| p50 latency | 2.500 µs |
+| p95 latency | 5.100 µs |
+| p99 latency | 8.100 µs |
+| Maximum latency | 1,116.900 µs |
+| Trades executed | 7,753 |
+| Open BUY orders | 1,096 |
+| Open SELL orders | 1,144 |
+| Status | PASS |
+
+### Observations
+
+- Median throughput across five runs was 301,587.25 orders/sec.
+- Median average latency across the five runs was 3.180 µs.
+- Run-to-run throughput varied from 256,038.02 to 317,582.31 orders/sec.
+- The final run's maximum latency was substantially higher than its p99 latency, indicating a tail-latency outlier worth investigating.
+- Outcome consistency passed for the benchmark workload.
+- The regression suite passed with 26 tests.
+- These measurements represent the matching-engine benchmark, not end-to-end latency across the firehose, ring buffer, and matching engine.
+- Results depend on hardware, operating-system activity, workload, and benchmark methodology. They do not establish production-grade HFT performance.
+
+
 ## 7. Observations and Limitations
 
 - Heap-based price-time order-book management substantially improved the measured matching-engine performance.
