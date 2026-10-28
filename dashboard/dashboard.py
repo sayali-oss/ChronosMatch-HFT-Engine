@@ -32,7 +32,22 @@ def get_status(buffer_usage, latency):
     elif buffer_usage > 70 or latency > 2.5:
         return "WARNING"
 
-    return "NORMAL"
+    else:
+        return "NORMAL"
+
+
+def get_grade(avg_latency):
+
+    if avg_latency < 1:
+        return "A+"
+
+    elif avg_latency < 2:
+        return "A"
+
+    elif avg_latency < 3:
+        return "B"
+
+    return "C"
 
 
 def main(stdscr):
@@ -56,7 +71,6 @@ def main(stdscr):
             }
 
         dashboard_refreshes += 1
-
         total_orders_processed += data["orders"]
 
         latency_history.append(data["latency"])
@@ -72,6 +86,18 @@ def main(stdscr):
 
         orders_per_second = data["orders"]
 
+        throughput_score = orders_per_second * 10
+
+        efficiency = max(
+            0,
+            min(
+                100,
+                100 - data["latency"] * 10
+            )
+        )
+
+        grade = get_grade(avg_latency)
+
         stdscr.clear()
 
         stdscr.addstr(
@@ -81,115 +107,55 @@ def main(stdscr):
         )
 
         # Core Metrics
-        stdscr.addstr(
-            2,
-            0,
-            f"Orders Received : {data['orders']}"
-        )
+        stdscr.addstr(2, 0, f"Orders Received : {data['orders']}")
+        stdscr.addstr(3, 0, f"Buffer Usage    : {data['buffer']}%")
+        stdscr.addstr(4, 0, f"Latency         : {data['latency'\]:.2f} ms")
 
-        stdscr.addstr(
-            3,
-            0,
-            f"Buffer Usage    : {data['buffer']}%"
-        )
-
-        stdscr.addstr(
-            4,
-            0,
-            f"Latency         : {data['latency']:.2f} ms"
-        )
-
-        # Status System
-        stdscr.addstr(
-            6,
-            0,
-            f"Engine Status   : {status}"
-        )
+        # Status
+        stdscr.addstr(6, 0, f"Engine Status   : {status}")
 
         # Alerts
-        stdscr.addstr(
-            8,
-            0,
-            "============= ALERTS ============="
-        )
+        stdscr.addstr(8, 0, "============= ALERTS =============")
 
-        alert_row = 10
+        row = 10
         alert_found = False
 
         if data["latency"] > 2.5:
-            stdscr.addstr(alert_row, 0, "HIGH LATENCY ALERT")
-            alert_row += 1
+            stdscr.addstr(row, 0, "HIGH LATENCY ALERT")
+            row += 1
             alert_found = True
 
         if data["buffer"] > 80:
-            stdscr.addstr(alert_row, 0, "BUFFER OVERFLOW RISK")
-            alert_row += 1
+            stdscr.addstr(row, 0, "BUFFER OVERFLOW RISK")
+            row += 1
             alert_found = True
 
         if not alert_found:
-            stdscr.addstr(alert_row, 0, "System Operating Normally")
+            stdscr.addstr(row, 0, "System Operating Normally")
 
-        # Day 11 Latency Monitoring
-        stdscr.addstr(
-            15,
-            0,
-            "========= LATENCY METRICS ========="
-        )
+        # Latency Panel
+        stdscr.addstr(15, 0, "========= LATENCY METRICS =========")
 
-        stdscr.addstr(
-            17,
-            0,
-            f"Current Latency : {data['latency']:.2f} ms"
-        )
+        stdscr.addstr(17, 0, f"Current Latency : {data['latency'\]:.2f} ms")
+        stdscr.addstr(18, 0, f"Average Latency : {avg_latency:.2f} ms")
+        stdscr.addstr(19, 0, f"Maximum Latency : {max_latency:.2f} ms")
+        stdscr.addstr(20, 0, f"Minimum Latency : {min_latency:.2f} ms")
 
-        stdscr.addstr(
-            18,
-            0,
-            f"Average Latency : {avg_latency:.2f} ms"
-        )
+        # Performance Metrics
+        stdscr.addstr(22, 0, "======= PERFORMANCE METRICS =======")
 
-        stdscr.addstr(
-            19,
-            0,
-            f"Maximum Latency : {max_latency:.2f} ms"
-        )
+        stdscr.addstr(24, 0, f"Total Orders Processed : {total_orders_processed}")
+        stdscr.addstr(25, 0, f"Orders Per Second      : {orders_per_second}")
+        stdscr.addstr(26, 0, f"Dashboard Refreshes    : {dashboard_refreshes}")
 
-        stdscr.addstr(
-            20,
-            0,
-            f"Minimum Latency : {min_latency:.2f} ms"
-        )
+        # Day 13 Section
+        stdscr.addstr(28, 0, "======= BENCHMARK STATISTICS =======")
 
-        # Day 12 Performance Metrics
-        stdscr.addstr(
-            22,
-            0,
-            "======= PERFORMANCE METRICS ======="
-        )
+        stdscr.addstr(30, 0, f"Throughput Score : {throughput_score}")
+        stdscr.addstr(31, 0, f"Engine Efficiency: {efficiency:.2f}%")
+        stdscr.addstr(32, 0, f"Performance Grade: {grade}")
 
-        stdscr.addstr(
-            24,
-            0,
-            f"Total Orders Processed : {total_orders_processed}"
-        )
-
-        stdscr.addstr(
-            25,
-            0,
-            f"Orders Per Second      : {orders_per_second}"
-        )
-
-        stdscr.addstr(
-            26,
-            0,
-            f"Dashboard Refreshes    : {dashboard_refreshes}"
-        )
-
-        stdscr.addstr(
-            28,
-            0,
-            "Press CTRL+C to Exit"
-        )
+        stdscr.addstr(34, 0, "Press CTRL+C to Exit")
 
         stdscr.refresh()
         time.sleep(1)
