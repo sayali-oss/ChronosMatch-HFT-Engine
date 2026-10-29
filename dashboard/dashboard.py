@@ -2,6 +2,7 @@ import curses
 import json
 import time
 
+# Metrics storage
 latency_history = []
 total_orders_processed = 0
 dashboard_refreshes = 0
@@ -32,8 +33,7 @@ def get_status(buffer_usage, latency):
     elif buffer_usage > 70 or latency > 2.5:
         return "WARNING"
 
-    else:
-        return "NORMAL"
+    return "NORMAL"
 
 
 def get_grade(avg_latency):
@@ -86,6 +86,7 @@ def main(stdscr):
 
         orders_per_second = data["orders"]
 
+        # Day 13 Metrics
         throughput_score = orders_per_second * 10
 
         efficiency = max(
@@ -98,64 +99,217 @@ def main(stdscr):
 
         grade = get_grade(avg_latency)
 
+        # Day 14 Monitoring Panel
+        if status == "NORMAL":
+            engine_health = "GOOD"
+        elif status == "WARNING":
+            engine_health = "MODERATE"
+        else:
+            engine_health = "POOR"
+
+        system_utilization = data["buffer"]
+
+        if data["buffer"] > 80:
+            risk_level = "HIGH"
+        elif data["buffer"] > 50:
+            risk_level = "MEDIUM"
+        else:
+            risk_level = "LOW"
+
+        performance_score = max(
+            0,
+            min(
+                100,
+                int(100 - avg_latency * 5)
+            )
+        )
+
         stdscr.clear()
 
         stdscr.addstr(
             0,
             0,
-            "========== ChronosMatch Dashboard =========="
+            "=========== ChronosMatch Dashboard ==========="
         )
 
-        # Core Metrics
-        stdscr.addstr(2, 0, f"Orders Received : {data['orders']}")
-        stdscr.addstr(3, 0, f"Buffer Usage    : {data['buffer']}%")
-        stdscr.addstr(4, 0, f"Latency         : {data['latency'\]:.2f} ms")
+        # WEEK 1
+        stdscr.addstr(
+            2,
+            0,
+            f"Orders Received : {data['orders']}"
+        )
 
-        # Status
-        stdscr.addstr(6, 0, f"Engine Status   : {status}")
+        stdscr.addstr(
+            3,
+            0,
+            f"Buffer Usage    : {data['buffer']}%"
+        )
 
-        # Alerts
-        stdscr.addstr(8, 0, "============= ALERTS =============")
+        stdscr.addstr(
+            4,
+            0,
+            f"Latency         : {data['latency']:.2f} ms"
+        )
+
+        # WEEK 2 STATUS
+        stdscr.addstr(
+            6,
+            0,
+            f"Engine Status   : {status}"
+        )
+
+        # WEEK 2 ALERTS
+        stdscr.addstr(
+            8,
+            0,
+            "=============== ALERTS ==============="
+        )
 
         row = 10
         alert_found = False
 
         if data["latency"] > 2.5:
-            stdscr.addstr(row, 0, "HIGH LATENCY ALERT")
+            stdscr.addstr(
+                row,
+                0,
+                "HIGH LATENCY ALERT"
+            )
             row += 1
             alert_found = True
 
         if data["buffer"] > 80:
-            stdscr.addstr(row, 0, "BUFFER OVERFLOW RISK")
+            stdscr.addstr(
+                row,
+                0,
+                "BUFFER OVERFLOW RISK"
+            )
             row += 1
             alert_found = True
 
         if not alert_found:
-            stdscr.addstr(row, 0, "System Operating Normally")
+            stdscr.addstr(
+                row,
+                0,
+                "System Operating Normally"
+            )
 
-        # Latency Panel
-        stdscr.addstr(15, 0, "========= LATENCY METRICS =========")
+        # DAY 11
+        stdscr.addstr(
+            15,
+            0,
+            "============ LATENCY METRICS ============"
+        )
 
-        stdscr.addstr(17, 0, f"Current Latency : {data['latency'\]:.2f} ms")
-        stdscr.addstr(18, 0, f"Average Latency : {avg_latency:.2f} ms")
-        stdscr.addstr(19, 0, f"Maximum Latency : {max_latency:.2f} ms")
-        stdscr.addstr(20, 0, f"Minimum Latency : {min_latency:.2f} ms")
+        stdscr.addstr(
+            17,
+            0,
+            f"Current Latency : {data['latency']:.2f} ms"
+        )
 
-        # Performance Metrics
-        stdscr.addstr(22, 0, "======= PERFORMANCE METRICS =======")
+        stdscr.addstr(
+            18,
+            0,
+            f"Average Latency : {avg_latency:.2f} ms"
+        )
 
-        stdscr.addstr(24, 0, f"Total Orders Processed : {total_orders_processed}")
-        stdscr.addstr(25, 0, f"Orders Per Second      : {orders_per_second}")
-        stdscr.addstr(26, 0, f"Dashboard Refreshes    : {dashboard_refreshes}")
+        stdscr.addstr(
+            19,
+            0,
+            f"Maximum Latency : {max_latency:.2f} ms"
+        )
 
-        # Day 13 Section
-        stdscr.addstr(28, 0, "======= BENCHMARK STATISTICS =======")
+        stdscr.addstr(
+            20,
+            0,
+            f"Minimum Latency : {min_latency:.2f} ms"
+        )
 
-        stdscr.addstr(30, 0, f"Throughput Score : {throughput_score}")
-        stdscr.addstr(31, 0, f"Engine Efficiency: {efficiency:.2f}%")
-        stdscr.addstr(32, 0, f"Performance Grade: {grade}")
+        # DAY 12
+        stdscr.addstr(
+            22,
+            0,
+            "========== PERFORMANCE METRICS =========="
+        )
 
-        stdscr.addstr(34, 0, "Press CTRL+C to Exit")
+        stdscr.addstr(
+            24,
+            0,
+            f"Total Orders Processed : {total_orders_processed}"
+        )
+
+        stdscr.addstr(
+            25,
+            0,
+            f"Orders Per Second      : {orders_per_second}"
+        )
+
+        stdscr.addstr(
+            26,
+            0,
+            f"Dashboard Refreshes    : {dashboard_refreshes}"
+        )
+
+        # DAY 13
+        stdscr.addstr(
+            28,
+            0,
+            "========== BENCHMARK STATS =========="
+        )
+
+        stdscr.addstr(
+            30,
+            0,
+            f"Throughput Score : {throughput_score}"
+        )
+
+        stdscr.addstr(
+            31,
+            0,
+            f"Engine Efficiency: {efficiency:.2f}%"
+        )
+
+        stdscr.addstr(
+            32,
+            0,
+            f"Performance Grade: {grade}"
+        )
+
+        # DAY 14
+        stdscr.addstr(
+            34,
+            0,
+            "======== PERFORMANCE SUMMARY ========"
+        )
+
+        stdscr.addstr(
+            36,
+            0,
+            f"Engine Health      : {engine_health}"
+        )
+
+        stdscr.addstr(
+            37,
+            0,
+            f"System Utilization : {system_utilization}%"
+        )
+
+        stdscr.addstr(
+            38,
+            0,
+            f"Risk Level         : {risk_level}"
+        )
+
+        stdscr.addstr(
+            39,
+            0,
+            f"Performance Score  : {performance_score}/100"
+        )
+
+        stdscr.addstr(
+            42,
+            0,
+            "Press CTRL+C to Exit"
+        )
 
         stdscr.refresh()
         time.sleep(1)
