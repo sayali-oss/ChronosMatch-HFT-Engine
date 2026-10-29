@@ -1,6 +1,7 @@
 
 import cProfile
 import pstats
+import random
 from pathlib import Path
 
 from firehose.order_generator import generate_order
@@ -8,20 +9,26 @@ from matching_engine import MatchingEngine
 
 
 def profile_matching_only(total_orders=10_000):
-    # Generate orders before profiling begins.
-    orders = [
-        generate_order(order_id)
-        for order_id in range(1, total_orders + 1)
-    ]
+    # Preserve the caller's random state.
+    previous_random_state = random.getstate()
 
+    try:
+        # Generate the same random order sequence on every run.
+        random.seed(42)
+        orders = [
+            generate_order(order_id)
+            for order_id in range(1, total_orders + 1)
+        ]
+    finally:
+        random.setstate(previous_random_state)
+
+    # Profile matching only, excluding order generation.
     engine = MatchingEngine()
-
     profiler = cProfile.Profile()
-    profiler.enable()
 
+    profiler.enable()
     for order in orders:
         engine.add_order(order)
-
     profiler.disable()
 
     print("\n===== MATCHING-ONLY PROFILE =====")
@@ -43,4 +50,3 @@ def profile_matching_only(total_orders=10_000):
 
 if __name__ == "__main__":
     profile_matching_only()
-
