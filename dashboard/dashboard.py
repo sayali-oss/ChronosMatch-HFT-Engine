@@ -310,7 +310,49 @@ def main(stdscr):
             0,
             "Press CTRL+C to Exit"
         )
+      # DAY 15 - FINAL REVIEW
+        stdscr.addstr(
+            41,
+            0,
+    "=========== WEEK 3 FINAL REVIEW ==========="
+        )
 
+        stdscr.addstr(
+            43,
+            0,
+            "Module Version      : v1.0"
+       )
+
+       stdscr.addstr(
+           44,
+           0,
+           "Monitoring Status   : Active"
+       )
+
+       stdscr.addstr(
+           45,
+           0,
+          "Alert System        : Enabled"
+       )
+
+       stdscr.addstr(
+           46,
+           0,
+           "Dashboard Health    : Stable"
+       )
+
+       stdscr.addstr(
+           47,
+           0,
+           "Week 3 Status       : COMPLETE"
+       )
+
+       stdscr.addstr(
+          49,
+          0,
+         "Press CTRL+C to Exit"
+       )
+  
         stdscr.refresh()
         time.sleep(1)
 
