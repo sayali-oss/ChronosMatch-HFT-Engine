@@ -101,16 +101,17 @@ This benchmark measures the existing million-order pipeline, not the matching en
 
 The earlier recorded million-order throughput was 150,876.22 orders/sec. The latest run is broadly comparable, and run-to-run variation should be evaluated through repeated measurements.
 
-## 6. Test Results
+## 6. Historical Test Results
 
-- Unit and integration test suite: 24 passed.
+- Original unit and integration test suite: 24 passed.
+- Later regression suite: 26 passed.
 - Firehose integration: PASS.
 - Matching-engine benchmark: PASS.
 - Million-order pipeline benchmark: PASS.
-- Git changes committed and pushed to `teammate1-dev`.
 
+These results are retained as historical records from their respective benchmark stages.
 
-## 6. Day 13 — Repeated Matching Engine Benchmark
+## 7. Day 13 — Repeated Matching Engine Benchmark
 
 ### Benchmark Configuration
 
@@ -159,21 +160,191 @@ The earlier recorded million-order throughput was 150,876.22 orders/sec. The lat
 - These measurements represent the matching-engine benchmark, not end-to-end latency across the firehose, ring buffer, and matching engine.
 - Results depend on hardware, operating-system activity, workload, and benchmark methodology. They do not establish production-grade HFT performance.
 
+## 8. Day 15 — Matching Engine Object-Creation Optimization
 
-## 7. Observations and Limitations
+### Objective
+
+Reduce unnecessary object-initialization overhead when processing standard orders.
+
+### Optimization Applied
+
+The `_Order.__init__()` method was modified to include a fast path for standard orders.
+
+Standard firehose orders contain exactly five required fields:
+
+- order_id
+- side
+- price
+- quantity
+- timestamp
+
+Previously, every order created a reserved-field set and iterated through the order dictionary to identify additional fields.
+
+The optimized implementation checks the dictionary length first:
+
+```python
+if len(order) == 5:
+    self.extra_fields = None
+else:
+    reserved = {
+        "order_id",
+        "side",
+        "price",
+        "quantity",
+        "timestamp",
+        "remaining",
+        "sequence",
+    }
+
+    extras = {
+        key: value
+        for key, value in order.items()
+        if key not in reserved
+    }
+    self.extra_fields = extras or None
+```
+
+This avoids unnecessary set creation and dictionary iteration for standard five-field orders.
+
+Orders containing additional custom fields continue to use the original extra-field handling logic.
+
+### Benchmark Configuration
+
+| Setting | Result |
+|---|---|
+| Orders per run | 10,000 |
+| Repetitions per session | 5 |
+| Random seed | 42 |
+| Baseline sessions | 1 |
+| Post-optimization sessions | 3 |
+| Matching-engine implementation | Python |
+| Benchmark type | Matching-engine-only |
+| Outcome consistency | PASS |
+
+### Baseline Results
+
+The baseline was recorded immediately before applying the optimization.
+
+| Metric | Result |
+|---|---:|
+| Median throughput | 327,829.08 orders/sec |
+| Median average latency | 2.935 µs |
+| Final-run elapsed time | 0.0308 s |
+| Final-run p50 latency | 2.400 µs |
+| Final-run p95 latency | 5.100 µs |
+| Final-run p99 latency | 8.300 µs |
+| Final-run maximum latency | 441.800 µs |
+| Trades executed | 7,753 |
+| Open BUY orders | 1,096 |
+| Open SELL orders | 1,144 |
+| Status | PASS |
+
+### Post-Optimization Throughput Results
+
+Three independent benchmark sessions were executed after the optimization.
+
+**Session 1**
+
+| Run | Throughput | Average Latency |
+|---:|---:|---:|
+| 1 | 334,206.73 orders/sec | 2.815 µs |
+| 2 | 378,522.63 orders/sec | 2.530 µs |
+| 3 | 385,120.48 orders/sec | 2.470 µs |
+| 4 | 382,210.40 orders/sec | 2.482 µs |
+| 5 | 317,012.47 orders/sec | 2.940 µs |
+| **Median** | **378,522.63 orders/sec** | **2.530 µs** |
+
+**Session 2**
+
+| Run | Throughput | Average Latency |
+|---:|---:|---:|
+| 1 | 334,784.06 orders/sec | 2.832 µs |
+| 2 | 373,028.54 orders/sec | 2.557 µs |
+| 3 | 372,062.57 orders/sec | 2.559 µs |
+| 4 | 395,900.06 orders/sec | 2.413 µs |
+| 5 | 375,668.69 orders/sec | 2.548 µs |
+| **Median** | **373,028.54 orders/sec** | **2.557 µs** |
+
+**Session 3**
+
+| Run | Throughput | Average Latency |
+|---:|---:|---:|
+| 1 | 321,931.59 orders/sec | 2.952 µs |
+| 2 | 400,735.75 orders/sec | 2.391 µs |
+| 3 | 363,726.30 orders/sec | 2.609 µs |
+| 4 | 404,855.02 orders/sec | 2.372 µs |
+| 5 | 374,936.26 orders/sec | 2.540 µs |
+| **Median** | **374,936.26 orders/sec** | **2.540 µs** |
+
+### Consolidated Performance Comparison
+
+| Metric | Baseline | Post-Optimization |
+|---|---:|---:|
+| Median throughput | 327,829.08 orders/sec | 375,495.81 orders/sec* |
+| Median average latency | 2.935 µs | 2.540 µs* |
+
+*Post-optimization figures are the arithmetic means of the three independent session medians.
+
+### Performance Improvement
+
+| Measurement | Change |
+|---|---:|
+| Throughput improvement | Approximately 14.54% |
+| Average latency reduction | Approximately 13.45% |
+
+The throughput improvement is calculated by comparing the mean of the three post-optimization session medians against the baseline session median.
+
+### Latest Session Latency Results
+
+| Metric | Baseline | Latest post-optimization session |
+|---|---:|---:|
+| p50 | 2.400 µs | 2.200 µs |
+| p95 | 5.100 µs | 4.600 µs |
+| p99 | 8.300 µs | 7.000 µs |
+| Maximum | 441.800 µs | 393.000 µs |
+
+These percentile and maximum measurements are from the final run of each respective benchmark session.
+
+### Correctness Verification
+
+| Check | Result |
+|---|---|
+| Unit and integration tests | 26 passed |
+| Trades executed | 7,753 |
+| Open BUY orders | 1,096 |
+| Open SELL orders | 1,144 |
+| Outcome consistency | PASS |
+| Custom order field preservation | PASS |
+| Benchmark result | PASS |
+
+A custom-field check confirmed that an additional `symbol` field remains present in the public order-book snapshot.
+
+### Observations
+
+- The fast path reduced unnecessary dictionary processing for standard orders.
+- All three post-optimization benchmark sessions produced higher median throughput than the baseline.
+- The average of the three post-optimization session medians was approximately 14.54% above the baseline.
+- Matching outcomes remained consistent across all benchmark sessions.
+- The P50, P95, and P99 latency measurements in the latest session were lower than the baseline measurements.
+- Benchmark timing still varies between runs, so the results should be interpreted in the context of the test environment.
+- The optimization improves the measured Python matching-engine workload; it does not establish end-to-end HFT latency or production-grade performance.
+
+## 9. Observations and Limitations
 
 - Heap-based price-time order-book management substantially improved the measured matching-engine performance.
+- The Day 15 object-initialization fast path further improved measured matching-engine throughput.
 - The ring buffer uses anonymous mmap and has not been verified as an independent-process IPC implementation.
 - The matching engine is currently implemented in Python, not Cython.
 - The under-50-microsecond end-to-end target has not yet been established by these benchmarks.
-- The maximum observed matching-engine latency was 2,457 µs, despite much lower average and percentile measurements.
-- Results depend on the hardware, operating system, workload, and benchmark conditions.
+- Maximum observed matching-engine latency can be substantially higher than average and percentile measurements.
+- Results depend on hardware, operating system, workload, and benchmark conditions.
 - These measurements do not establish production-grade high-frequency trading performance.
 
-## 8. Next Steps
+## 10. Next Steps
 
-1. Repeat matching-engine and ring-buffer benchmarks to measure run-to-run variation.
+1. Run additional benchmark sessions to monitor performance variation.
 2. Profile the matching engine using a representative workload.
-3. Verify the remaining project requirements, including Cython ownership and implementation.
-4. Confirm whether the ring buffer needs independent-process IPC.
-5. Measure end-to-end latency across order generation, ring-buffer transport, and matching.
+3. Investigate further optimization opportunities based on profiling evidence.
+4. Verify the remaining project requirements, including Cython ownership and implementation.
+5. Confirm whether the ring buffer needs independent-process IPC.
+6. Measure end-to-end latency across order generation, ring-buffer transport, and matching.

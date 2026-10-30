@@ -26,21 +26,26 @@ class _Order:
         self.remaining = self.quantity
         self.sequence = sequence
 
-        reserved = {
-            "order_id",
-            "side",
-            "price",
-            "quantity",
-            "timestamp",
-            "remaining",
-            "sequence",
-        }
-        extras = {
-            key: value
-            for key, value in order.items()
-            if key not in reserved
-        }
-        self.extra_fields = extras or None
+        # Fast path: standard orders contain exactly five required fields.
+        if len(order) == 5:
+            self.extra_fields = None
+        else:
+            reserved = {
+                "order_id",
+                "side",
+                "price",
+                "quantity",
+                "timestamp",
+                "remaining",
+                "sequence",
+            }
+
+            extras = {
+                key: value
+                for key, value in order.items()
+                if key not in reserved
+            }
+            self.extra_fields = extras or None
 
     def to_dict(self):
         """Return a dictionary compatible with the public order-book API."""
@@ -49,6 +54,7 @@ class _Order:
             if self.extra_fields is not None
             else {}
         )
+
         result.update({
             "order_id": self.order_id,
             "side": self.side,
@@ -58,6 +64,7 @@ class _Order:
             "remaining": self.remaining,
             "sequence": self.sequence,
         })
+
         return result
 
 
@@ -185,7 +192,7 @@ class MatchingEngine:
         while sell.remaining > 0 and self.buy_heap:
             buy = self.buy_heap[0][2]
 
-            if buy.price < sell.price:
+            if sell.price > buy.price:
                 break
 
             heapq.heappop(self.buy_heap)
