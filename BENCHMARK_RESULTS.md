@@ -348,3 +348,75 @@ A custom-field check confirmed that an additional `symbol` field remains present
 4. Verify the remaining project requirements, including Cython ownership and implementation.
 5. Confirm whether the ring buffer needs independent-process IPC.
 6. Measure end-to-end latency across order generation, ring-buffer transport, and matching.
+
+## 11. Week 4 - Integration and Scalability Testing
+
+### Objective
+
+Strengthen the integration between the mmap ring buffer and the Python matching engine, validate order delivery under buffer pressure, and evaluate firehose performance with larger workloads.
+
+### Integration Improvements
+
+The integration test suite covers:
+
+1. Complete order flow from the ring buffer to the matching engine.
+2. Multiple orders processed in FIFO order.
+3. Ring-buffer full condition and wraparound.
+4. Sustained order processing under buffer pressure.
+5. Verification of order integrity and matching-engine outcomes.
+
+### Sustained Buffer Pressure Test
+
+| Metric | Result |
+|---|---:|
+| Total orders generated | 1,000 |
+| Total orders consumed | 1,000 |
+| Order loss | 0 |
+| Order duplication | 0 |
+| FIFO preservation | PASS |
+| Matching-engine processing | PASS |
+| Overall status | PASS |
+
+The test repeatedly filled the ring buffer, consumed orders to free capacity, and continued writing until all 1,000 orders had been processed.
+
+### Firehose Integration Benchmark
+
+| Metric | 5,000 Orders | 50,000 Orders | 100,000 Orders |
+|---|---:|---:|---:|
+| Orders generated | 5,000 | 50,000 | 100,000 |
+| Orders consumed | 5,000 | 50,000 | 100,000 |
+| Trades executed | 3,968 | 38,936 | 78,666 |
+| Open BUY orders | 523 | 5,614 | 10,429 |
+| Open SELL orders | 506 | 5,413 | 10,821 |
+| Execution time | 0.087529 s | 0.976748 s | 1.944932 s |
+| Throughput | 57,123.73 orders/sec | 51,190.27 orders/sec | 51,415.69 orders/sec |
+| Status | PASS | PASS | PASS |
+
+### Performance Observations
+
+- All generated orders were successfully consumed in all three workloads.
+- No order-count mismatch occurred.
+- The pipeline successfully processed up to 100,000 orders.
+- Throughput remained approximately stable when the workload increased from 50,000 to 100,000 orders.
+- The measured throughput difference between these two workloads was approximately 0.44%.
+- The ring buffer successfully handled full-buffer conditions and wraparound in the integration tests.
+
+### Regression Testing
+
+| Check | Result |
+|---|---|
+| Complete automated test suite | 29 passed |
+| Multiple-order FIFO processing | PASS |
+| Buffer-full handling | PASS |
+| Ring-buffer wraparound | PASS |
+| Sustained buffer-pressure test | PASS |
+| 50,000-order firehose test | PASS |
+| 100,000-order firehose test | PASS |
+
+### Week 4 Conclusion
+
+Week 4 focused on strengthening the integration between the ring buffer and matching engine, testing sustained order flow, and evaluating scalability through larger firehose workloads.
+
+The expanded test suite passed all 29 tests. The complete pipeline successfully processed 100,000 orders at a measured throughput of 51,415.69 orders per second.
+
+These results demonstrate successful functional integration and measured throughput under the tested workloads. They do not establish independent-process IPC performance or production-grade HFT latency.
