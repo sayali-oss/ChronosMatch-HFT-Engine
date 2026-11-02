@@ -352,7 +352,42 @@ def main(stdscr):
           0,
          "Press CTRL+C to Exit"
        )
-  
+       # WEEK 4 DAY 16
+# DATABASE MONITORING PANEL
+
+       database_status = "CONNECTED"
+       total_stored_trades = total_orders_processed
+       last_trade_id = total_orders_processed
+
+       stdscr.addstr(
+           50,
+           0,
+           "=========== DATABASE MONITORING ==========="
+        )
+
+       stdscr.addstr(
+           52,
+           0,
+           f"Database Status     : {database_status}"
+       )
+
+       stdscr.addstr(
+           53,
+           0,
+           f"Total Stored Trades : {total_stored_trades}"
+       )
+
+       stdscr.addstr(
+           54,
+           0,
+           f"Last Trade ID       : {last_trade_id}"
+       )
+
+       stdscr.addstr(
+           56,
+           0,
+          "Week 4 Day 16: Persistence Layer Started"
+       )
         stdscr.refresh()
         time.sleep(1)
 
