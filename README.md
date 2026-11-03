@@ -85,68 +85,92 @@ Work only in your assigned branch.
 
 Push daily commits with clear messages.
 
-Weekly merge into main after review
-Week 2 Progress Plan
-Teammate 1 - Order Book (Cython)
-Day 6
-Setup Cython
-Create orderbook.pyx
-Design Buy Order structure
-Day 7
-Buy order insertion logic
-Order storage testing
-Day 8
-Implement matching algorithm
-Day 9
-Optimize matching speed
-Day 10
-Finalize Cython implementation
-Teammate 2 - Matching Engine
-Day 6
-Design Sell Order structure
-Study Price-Time Priority
-Day 7
-Sell order insertion logic
-Day 8
-Partial fill handling
-Trade execution logic
-Day 9
-Edge case handling
-Day 10
-Matching accuracy testing
-Teammate 3 - Integration & Testing
-Day 6
-Connect Firehose with Order Book
-Day 7
-Test order insertion
-Day 8
-Validate matched trades
-Day 9
-Stress test with 10K+ orders
-Day 10
-Integration testing
-Week 2 verification
-Teammate 4 - Dashboard Monitoring
-Day 6
-Read data from engine.log
-Day 7
-Read data from engine.json
-JSON parsing
-Day 8
-High Latency Alert
-Buffer Overflow Alert
-Day 9
-Health Status System
-NORMAL
-WARNING
-CRITICAL
-Day 10
-UI polishing
-Dashboard cleanup
-Final Week 2 Demo
-Week 2 Deliverables
+# Week 2
+
+# Day 6
+
+T1: Setup Cython
+
+T1: Create orderbook.pyx
+
+T1: Design Buy Order Structure
+
+T2: Design Sell Order Structure
+
+T2: Study Price-Time Priority
+
+T3: Connect Firehose with Order Book
+
+T4: Read data from engine.log
+
+# Day 7
+
+T1: Buy Order Insertion Logic
+
+T1: Order Storage Testing
+
+T2: Sell Order Insertion Logic
+
+T3: Test Order Insertion
+
+T4: Read data from engine.json
+
+T4: JSON Parsing
+
+# Day 8
+
+T1: Implement Matching Algorithm
+
+T2: Partial Fill Handling
+
+T2: Trade Execution Logic
+
+T3: Validate Matched Trades
+
+T4: High Latency Alert
+
+T4: Buffer Overflow Alert
+
+# Day 9
+
+T1: Optimize Matching Speed
+
+T2: Handle Edge Cases
+
+T3: Stress Test with 10K+ Orders
+
+T4: Health Status System
+
+T4: NORMAL
+
+T4: WARNING
+
+T4: CRITICAL
+
+# Day 10
+
+T1: Finalize Cython Implementation
+
+T2: Matching Accuracy Testing
+
+T3: Integration Testing
+
+T3: Week 2 Verification
+
+T4: UI Polishing
+
+T4: Dashboard Cleanup
+
+T4: Final Week 2 Demo
+
+# Week 2 Deliverables
+
 Working Cython Order Book
+
 Matching Engine
+
 Dashboard Alerts
+
 JSON Integration
-Real-time Monitoring Dashboard
+
+Real-Time Monitoring Dashboard
