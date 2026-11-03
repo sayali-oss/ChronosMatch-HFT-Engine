@@ -388,6 +388,46 @@ def main(stdscr):
            0,
           "Week 4 Day 16: Persistence Layer Started"
        )
+       latest_trade_type = "BUY"
+       latest_quantity = 100
+       latest_price = 245.50
+       last_save_time = "14:22:10"
+       persistence_status = "SAVED"
+       stdscr.addstr(
+           58,
+           0,
+           "=========== TRADE PERSISTENCE ==========="
+       )
+
+       stdscr.addstr(
+           60,
+           0,
+           f"Latest Trade Type : {latest_trade_type}"
+       )
+
+       stdscr.addstr(
+           61,
+           0,
+           f"Latest Quantity   : {latest_quantity}"
+       )
+
+       stdscr.addstr(
+           62,
+           0,
+           f"Latest Price      : {latest_price}"
+       )
+
+       stdscr.addstr(
+           63,
+           0,
+           f"Last Save Time    : {last_save_time}"
+       )
+
+       stdscr.addstr(
+           64,
+           0,
+           f"Persistence Status: {persistence_status}"
+       )
         stdscr.refresh()
         time.sleep(1)
 
