@@ -85,4 +85,68 @@ Work only in your assigned branch.
 
 Push daily commits with clear messages.
 
-Weekly merge into main after review.
+Weekly merge into main after review
+Week 2 Progress Plan
+Teammate 1 - Order Book (Cython)
+Day 6
+Setup Cython
+Create orderbook.pyx
+Design Buy Order structure
+Day 7
+Buy order insertion logic
+Order storage testing
+Day 8
+Implement matching algorithm
+Day 9
+Optimize matching speed
+Day 10
+Finalize Cython implementation
+Teammate 2 - Matching Engine
+Day 6
+Design Sell Order structure
+Study Price-Time Priority
+Day 7
+Sell order insertion logic
+Day 8
+Partial fill handling
+Trade execution logic
+Day 9
+Edge case handling
+Day 10
+Matching accuracy testing
+Teammate 3 - Integration & Testing
+Day 6
+Connect Firehose with Order Book
+Day 7
+Test order insertion
+Day 8
+Validate matched trades
+Day 9
+Stress test with 10K+ orders
+Day 10
+Integration testing
+Week 2 verification
+Teammate 4 - Dashboard Monitoring
+Day 6
+Read data from engine.log
+Day 7
+Read data from engine.json
+JSON parsing
+Day 8
+High Latency Alert
+Buffer Overflow Alert
+Day 9
+Health Status System
+NORMAL
+WARNING
+CRITICAL
+Day 10
+UI polishing
+Dashboard cleanup
+Final Week 2 Demo
+Week 2 Deliverables
+Working Cython Order Book
+Matching Engine
+Dashboard Alerts
+JSON Integration
+Real-time Monitoring Dashboard
