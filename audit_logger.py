@@ -8,6 +8,7 @@ class AuditLogger:
     def __init__(self):
         self.audit_logs = []
         self.next_audit_id = 1
+        self.processed_trade_count = 0
 
     def log_trade(self, trade):
         """Create an audit record for an executed trade."""
@@ -44,6 +45,34 @@ class AuditLogger:
 
         return audit_record
 
+    def log_engine_trades(self, engine):
+        """
+        Collect newly executed trades from the Matching Engine
+        and store them in the audit log.
+        """
+
+        if not hasattr(engine, "trades"):
+            raise ValueError(
+                "Engine must have a trades attribute"
+            )
+
+        if not isinstance(engine.trades, list):
+            raise ValueError(
+                "Engine trades must be a list"
+            )
+
+        new_trades = engine.trades[self.processed_trade_count:]
+
+        new_records = []
+
+        for trade in new_trades:
+            record = self.log_trade(trade)
+            new_records.append(record)
+
+            self.processed_trade_count += 1
+
+        return new_records
+
     def get_logs(self):
         """Return all audit records."""
         return self.audit_logs.copy()
@@ -51,4 +80,3 @@ class AuditLogger:
     def get_total_logs(self):
         """Return the total number of audit records."""
         return len(self.audit_logs)
-
