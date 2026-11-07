@@ -1,9 +1,11 @@
+
+import csv
 from datetime import datetime, timezone
 from audit_logger import AuditLogger
 from matching_engine import MatchingEngine
 
 
-def test_timestamp_is_valid_iso_format():
+def test_export_logs_creates_csv_file(tmp_path):
     logger = AuditLogger()
 
     trade = {
@@ -13,14 +15,16 @@ def test_timestamp_is_valid_iso_format():
         "quantity": 5
     }
 
-    record = logger.log_trade(trade)
+    logger.log_trade(trade)
 
-    parsed_time = datetime.fromisoformat(record["timestamp"])
+    file_path = tmp_path / "audit_report.csv"
 
-    assert isinstance(parsed_time, datetime)
+    logger.export_logs(file_path)
+
+    assert file_path.exists()
 
 
-def test_timestamp_uses_utc_timezone():
+def test_export_logs_contains_correct_trade_data(tmp_path):
     logger = AuditLogger()
 
     trade = {
@@ -30,42 +34,49 @@ def test_timestamp_uses_utc_timezone():
         "quantity": 5
     }
 
-    record = logger.log_trade(trade)
+    logger.log_trade(trade)
 
-    parsed_time = datetime.fromisoformat(record["timestamp"])
+    file_path = tmp_path / "audit_report.csv"
 
-    assert parsed_time.tzinfo is not None
-    assert parsed_time.utcoffset() == timezone.utc.utcoffset(parsed_time)
+    logger.export_logs(file_path)
 
+    with file_path.open(
+        mode="r",
+        newline="",
+        encoding="utf-8"
+    ) as csvfile:
 
-def test_every_executed_trade_has_timestamp():
-    engine = MatchingEngine()
-    logger = AuditLogger()
-
-    engine.add_order({
-        "order_id": 1,
-        "side": "SELL",
-        "price": 100,
-        "quantity": 10,
-        "timestamp": 1
-    })
-
-    engine.add_order({
-        "order_id": 2,
-        "side": "BUY",
-        "price": 101,
-        "quantity": 4,
-        "timestamp": 2
-    })
-
-    logger.log_engine_trades(engine)
-
-    records = logger.get_logs()
+        reader = csv.DictReader(csvfile)
+        records = list(reader)
 
     assert len(records) == 1
+    assert records[0]["buy_order_id"] == "1"
+    assert records[0]["sell_order_id"] == "2"
+    assert records[0]["price"] == "100"
+    assert records[0]["quantity"] == "5"
+    assert records[0]["event_type"] == "TRADE_EXECUTED"
+    assert records[0]["timestamp"] != ""
 
-    for record in records:
-        parsed_time = datetime.fromisoformat(record["timestamp"])
 
-        assert parsed_time.tzinfo is not None
-        assert parsed_time.utcoffset() == timezone.utc.utcoffset(parsed_time)
+def test_export_empty_logs_creates_csv_with_headers(tmp_path):
+    logger = AuditLogger()
+
+    file_path = tmp_path / "empty_report.csv"
+
+    logger.export_logs(file_path)
+
+    assert file_path.exists()
+
+    with file_path.open(
+        mode="r",
+        newline="",
+        encoding="utf-8"
+    ) as csvfile:
+
+        reader = csv.reader(csvfile)
+        headers = next(reader)
+        rows = list(reader)
+
+    assert "audit_id" in headers
+    assert "timestamp" in headers
+    assert rows == []

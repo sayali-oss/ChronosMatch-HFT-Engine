@@ -1,9 +1,11 @@
 
+import csv
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 class AuditLogger:
-    """Stores audit records for executed trades."""
+    """Stores and exports audit records for executed trades."""
 
     def __init__(self):
         self.audit_logs = []
@@ -46,20 +48,13 @@ class AuditLogger:
         return audit_record
 
     def log_engine_trades(self, engine):
-        """
-        Collect newly executed trades from the Matching Engine
-        and store them in the audit log.
-        """
+        """Collect newly executed trades from the matching engine."""
 
         if not hasattr(engine, "trades"):
-            raise ValueError(
-                "Engine must have a trades attribute"
-            )
+            raise ValueError("Engine must have a trades attribute")
 
         if not isinstance(engine.trades, list):
-            raise ValueError(
-                "Engine trades must be a list"
-            )
+            raise ValueError("Engine trades must be a list")
 
         new_trades = engine.trades[self.processed_trade_count:]
 
@@ -68,7 +63,6 @@ class AuditLogger:
         for trade in new_trades:
             record = self.log_trade(trade)
             new_records.append(record)
-
             self.processed_trade_count += 1
 
         return new_records
@@ -80,3 +74,34 @@ class AuditLogger:
     def get_total_logs(self):
         """Return the total number of audit records."""
         return len(self.audit_logs)
+
+    def export_logs(self, filename):
+        """Export audit records to a CSV file."""
+
+        fieldnames = [
+            "audit_id",
+            "event_type",
+            "buy_order_id",
+            "sell_order_id",
+            "price",
+            "quantity",
+            "timestamp"
+        ]
+
+        file_path = Path(filename)
+
+        with file_path.open(
+            mode="w",
+            newline="",
+            encoding="utf-8"
+        ) as csvfile:
+
+            writer = csv.DictWriter(
+                csvfile,
+                fieldnames=fieldnames
+            )
+
+            writer.writeheader()
+            writer.writerows(self.audit_logs)
+
+        return str(file_path)
