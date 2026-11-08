@@ -1,0 +1,612 @@
+rom __future__ import annotations
+
+import json
+import os
+import re
+import sqlite3
+import sys
+import time
+from collections import Counter, deque
+from datetime import datetime
+
+from teammate1_core import DEFAULT_PATHS, Paths, RingBuffer
+
+try:
+    import curses
+except ImportError:                                  # Windows without windows-curses
+    curses = None
+
+# ----------------------------------------------------------------------------
+# Thresholds (tune freely)
+# ----------------------------------------------------------------------------
+USAGE_WARN, USAGE_CRIT = 0.80, 0.95
+P99_WARN_US, P99_CRIT_US = 500.0, 5000.0
+HEARTBEAT_STALE_S = 3.0
+DB_LAG_WARN = 20_000
+STICKY_S = 30                       # how long event-type alerts stay visible
+LOG_RE = re.compile(r"\|\s*(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s*\|\s*(.*)$")
+
+
+# ----------------------------------------------------------------------------
+# Small formatting helpers
+# ----------------------------------------------------------------------------
+def fi(n):
+    try:
+        return f"{int(n):,}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def fus(v):
+    v = v or 0
+    return f"{v / 1000:.2f}ms" if v >= 1000 else f"{v:.1f}us"
+
+
+def fdur(s):
+    s = int(s or 0)
+    return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+
+def fbytes(n):
+    n = float(n or 0)
+    for u in ("B", "KB", "MB", "GB"):
+        if n < 1024 or u == "GB":
+            return f"{n:.0f}{u}" if u == "B" else f"{n:.1f}{u}"
+        n /= 1024
+
+
+def bar(frac, width=24):
+    frac = max(0.0, min(1.0, frac or 0))
+    n = int(round(frac * width))
+    return "[" + "#" * n + "-" * (width - n) + "]"
+
+
+def spark(values, width=40):
+    chars = " .:-=+*#%@"
+    vals = list(values)[-width:]
+    if not vals:
+        return ""
+    lo, hi = min(vals), max(vals)
+    span = (hi - lo) or 1
+    return "".join(chars[int((v - lo) / span * (len(chars) - 1))] for v in vals)
+
+
+# ----------------------------------------------------------------------------
+# Alert system (Week 2)
+# ----------------------------------------------------------------------------
+LEVEL_RANK = {"CRIT": 0, "WARN": 1, "INFO": 2}
+
+
+class AlertManager:
+    def __init__(self):
+        self.active = {}
+        self.history = deque(maxlen=200)         # (ts, level, message, RAISED|CLEARED)
+        self.last_seen = {}                      # sticky event alerts
+
+    def _sticky(self, key, now, happened):
+        if happened:
+            self.last_seen[key] = now
+        return now - self.last_seen.get(key, -1e9) < STICKY_S
+
+    def evaluate(self, snap) -> list:
+        now, st, eng = snap["now"], snap["status"], snap["engine"]
+        ring, lat = snap["ring"], eng.get("latency_us", {})
+        firing = {}
+
+        def fire(key, level, msg):
+            firing[key] = (level, msg)
+
+        if st == "OFFLINE":
+            fire("engine", "WARN", "Engine offline - no engine.json found")
+        elif st == "STALLED":
+            fire("engine", "CRIT", f"Engine stalled - no heartbeat for {snap['heartbeat_age']:.0f}s")
+        elif st == "CRASHED":
+            fire("engine", "CRIT", "Engine CRASHED - check engine.log")
+
+        u = ring.get("usage", 0)
+        if u >= USAGE_CRIT:
+            fire("buffer", "CRIT", f"Ring buffer {u * 100:.0f}% full - orders will block")
+        elif u >= USAGE_WARN:
+            fire("buffer", "WARN", f"Ring buffer {u * 100:.0f}% full - consumer lagging")
+        if self._sticky("backpressure", now, snap["full_hits_delta"] > 0):
+            fire("backpressure", "WARN", f"Producer hit a full buffer ({fi(ring.get('full_hits'))} times)")
+
+        p99 = lat.get("p99", 0)
+        if p99 >= P99_CRIT_US:
+            fire("latency", "CRIT", f"p99 latency {fus(p99)} (limit {fus(P99_CRIT_US)})")
+        elif p99 >= P99_WARN_US:
+            fire("latency", "WARN", f"p99 latency {fus(p99)} (limit {fus(P99_WARN_US)})")
+        if st == "RUNNING" and ring.get("depth", 0) > 1000 and eng.get("throughput", 1) < 1000:
+            fire("slow", "WARN", "Engine throughput collapsed while orders are queued")
+        if eng.get("errors"):
+            fire("order_errors", "WARN", f"{eng['errors']} order(s) failed processing")
+
+        lg = snap["log"]
+        if self._sticky("log_error", now, lg["new_errors"] > 0):
+            fire("log_error", "CRIT" if lg["last_level"] in ("ERROR", "CRITICAL") else "WARN",
+                 f"engine.log: {lg['last_error'][:70]}")
+
+        db = snap["db"]
+        if db["state"] in ("CORRUPT", "ERROR"):
+            fire("db", "CRIT", f"Database {db['state']}: {db['note']}"[:90])
+        elif db["state"] == "LOCKED":
+            fire("db", "WARN", "Database locked - dashboard read delayed")
+        elif db["state"] == "MISSING" and st in ("RUNNING", "IDLE"):
+            fire("db", "WARN", "Engine running but trades.db not created yet")
+        if db["flush_errors"]:
+            fire("db_flush", "CRIT", f"SQLite flush errors: {db['flush_errors']}")
+        if db["lag"] > DB_LAG_WARN:
+            fire("db_lag", "WARN", f"Persistence lag {fi(db['lag'])} trades behind engine")
+        au = snap["audit"]
+        if st in ("STOPPED", "OFFLINE") and db["rows"] and au["trades"] and au["trades"] != db["rows"]:
+            fire("audit_mismatch", "WARN",
+                 f"Audit trades ({fi(au['trades'])}) != DB trades ({fi(db['rows'])})")
+
+        for k, (lvl, msg) in firing.items():
+            cur = self.active.get(k)
+            if cur is None or cur["level"] != lvl:
+                self.active[k] = {"key": k, "level": lvl, "msg": msg, "since": now}
+                self.history.appendleft((now, lvl, msg, "RAISED"))
+            else:
+                cur["msg"] = msg
+        for k in [k for k in self.active if k not in firing]:
+            a = self.active.pop(k)
+            self.history.appendleft((now, "INFO", a["msg"], "CLEARED"))
+        return sorted(self.active.values(), key=lambda a: (LEVEL_RANK[a["level"]], a["since"]))
+
+
+# ----------------------------------------------------------------------------
+# Monitor: collects everything (Week 1-4)
+# ----------------------------------------------------------------------------
+class Monitor:
+    def __init__(self, paths: Paths = DEFAULT_PATHS, history: int = 90):
+        self.paths = paths
+        self.ring = None
+        self.alerts = AlertManager()
+        self.hist = {k: deque(maxlen=history) for k in ("throughput", "p99", "usage", "db_rate")}
+        # engine.log tail state
+        self.log_pos, self.log_tail = 0, deque(maxlen=300)
+        self.log_levels, self.last_error, self.last_error_level = Counter(), "", ""
+        # audit tail state
+        self.au_pos, self.au_lines, self.au_trades = 0, 0, 0
+        self.au_tail, self.au_events = deque(maxlen=100), Counter()
+        # db state
+        self.db_rows_prev, self.db_t_prev, self.db_rate = 0, time.time(), 0.0
+        self.db_check_t, self.db_check = 0.0, ("UNKNOWN", "not checked yet")
+        self.full_prev = 0
+        self.bench_mtime, self.bench = 0, {}
+
+    # -- engine.json (Week 2) -------------------------------------------------
+    def _read_engine(self):
+        try:
+            with open(self.paths.engine_json, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    # -- ring buffer, mapped read-only (Week 1) -----------------------------------
+    def _read_ring(self, js):
+        if self.ring is None and os.path.exists(self.paths.ring):
+            try:
+                self.ring = RingBuffer.attach(self.paths.ring, readonly=True)
+            except (OSError, ValueError):
+                self.ring = None
+        if self.ring is not None:
+            try:
+                return self.ring.stats()
+            except (ValueError, OSError):
+                self.ring = None
+        return js.get("ring", {})
+
+    # -- incremental tail of a text file --------------------------------------------
+    @staticmethod
+    def _tail(path, pos, raw=False):
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return [], 0, True
+        reset = size < pos
+        if reset:
+            pos = 0
+        with open(path, "rb") as f:
+            f.seek(pos)
+            data = f.read(16 << 20)
+        cut = data.rfind(b"\n") + 1                       # only whole lines
+        if raw:
+            return data[:cut], pos + cut, reset
+        return data[:cut].decode("utf-8", "replace").splitlines(), pos + cut, reset
+
+    def _read_log(self):
+        lines, self.log_pos, reset = self._tail(self.paths.engine_log, self.log_pos)
+        if reset:
+            self.log_tail.clear()
+            self.log_levels.clear()
+        new_err = 0
+        for ln in lines:
+            self.log_tail.append(ln)
+            m = LOG_RE.search(ln)
+            if m:
+                self.log_levels[m.group(1)] += 1
+                if m.group(1) in ("ERROR", "CRITICAL", "WARNING"):
+                    if m.group(1) != "WARNING":
+                        new_err += 1
+                    self.last_error, self.last_error_level = m.group(2), m.group(1)
+        return {"tail": list(self.log_tail), "levels": dict(self.log_levels), "new_errors": new_err,
+                "last_error": self.last_error, "last_level": self.last_error_level}
+
+    def _read_audit(self):
+        data, self.au_pos, reset = self._tail(self.paths.audit_log, self.au_pos, raw=True)
+        if reset:
+            self.au_lines = self.au_trades = 0
+            self.au_tail.clear()
+            self.au_events.clear()
+        if data:                                          # byte counting = fast even for huge logs
+            trades = data.count(b",TRADE,")
+            lines = data.count(b"\n") - (1 if data.startswith(b"ts_ns") else 0)
+            self.au_trades += trades
+            self.au_lines += lines
+            self.au_events["TRADE"] += trades
+            for ln in data[-4096:].decode("utf-8", "replace").splitlines()[-8:]:
+                self.au_tail.append(ln)
+            if trades < lines:                            # lifecycle events are rare: parse only those
+                for ln in data.decode("utf-8", "replace").splitlines():
+                    p = ln.split(",")
+                    if len(p) > 1 and p[1] not in ("TRADE", "event") and not ln.startswith("ts_ns"):
+                        self.au_events[p[1]] += 1
+        size = os.path.getsize(self.paths.audit_log) if os.path.exists(self.paths.audit_log) else 0
+        return {"lines": self.au_lines, "trades": self.au_trades, "size": size,
+                "events": dict(self.au_events), "tail": list(self.au_tail)[-8:]}
+
+    # -- database monitoring (Week 4) ----------------------------------------------------
+    def _read_db(self, js, now):
+        p = self.paths.db
+        out = {"state": "MISSING", "note": "trades.db not found", "rows": 0, "size": 0, "wal": 0,
+               "last": [], "rate": self.db_rate, "lag": 0, "pending": 0, "flush_errors": 0,
+               "last_flush_ms": 0.0, "checked_ago": None}
+        edb = js.get("db", {})
+        out.update(pending=edb.get("pending", 0), flush_errors=edb.get("flush_errors", 0),
+                   last_flush_ms=edb.get("last_flush_ms", 0.0))
+        if not os.path.exists(p):
+            return out
+        out["size"] = os.path.getsize(p)
+        out["wal"] = os.path.getsize(p + "-wal") if os.path.exists(p + "-wal") else 0
+        try:
+            conn = sqlite3.connect(p, timeout=0.3)
+            conn.execute("PRAGMA query_only=ON")
+            rows = conn.execute("SELECT COALESCE(MAX(trade_id),0) FROM trades").fetchone()[0]
+            out["last"] = conn.execute(
+                "SELECT trade_id,buy_order_id,sell_order_id,price,quantity,ts_ns FROM trades "
+                "ORDER BY trade_id DESC LIMIT 5").fetchall()
+            if now - self.db_check_t > 15 and out["size"] < 200 * 1048576:   # health check every 15 s
+                res = conn.execute("PRAGMA quick_check").fetchone()[0]
+                self.db_check = ("OK", "quick_check passed") if res == "ok" else ("CORRUPT", res)
+                self.db_check_t = now
+            conn.close()
+            out["state"], out["note"] = self.db_check if self.db_check[0] != "UNKNOWN" else ("OK", "")
+            out["rows"] = rows
+            dt = now - self.db_t_prev
+            if dt >= 1:
+                self.db_rate = max(0, (rows - self.db_rows_prev) / dt)
+                self.db_rows_prev, self.db_t_prev = rows, now
+            out["rate"] = self.db_rate
+            out["lag"] = max(0, js.get("trades", 0) - rows) if js else 0
+            out["checked_ago"] = now - self.db_check_t if self.db_check_t else None
+        except sqlite3.OperationalError as e:
+            out["state"], out["note"] = ("LOCKED", str(e)) if "lock" in str(e).lower() else ("ERROR", str(e))
+        except sqlite3.DatabaseError as e:
+            out["state"], out["note"] = "CORRUPT", str(e)
+        return out
+
+    def _read_bench(self):
+        try:
+            m = os.path.getmtime(self.paths.bench_json)
+            if m != self.bench_mtime:
+                with open(self.paths.bench_json, encoding="utf-8") as f:
+                    self.bench = json.load(f)
+                self.bench_mtime = m
+        except (OSError, ValueError):
+            pass
+        return self.bench
+
+    # -- engine status system (Week 2) -----------------------------------------------------
+    @staticmethod
+    def _status(js, age):
+        if not js:
+            return "OFFLINE", "waiting for engine.json"
+        st = js.get("status", "UNKNOWN")
+        if st == "RUNNING":
+            if age > HEARTBEAT_STALE_S:
+                return "STALLED", f"no heartbeat for {age:.0f}s"
+            if js.get("throughput", 0) < 1 and js.get("ring", {}).get("depth", 0) == 0:
+                return "IDLE", "waiting for orders"
+            return "RUNNING", "processing orders"
+        return st, "engine finished" if st == "STOPPED" else "see engine.log"
+
+    # -- one full poll ----------------------------------------------------------------------------
+    def poll(self) -> dict:
+        now = time.time()
+        js = self._read_engine()
+        age = now - js.get("updated_at", now) if js else 0.0
+        status, note = self._status(js, age)
+        ring = self._read_ring(js)
+        full = ring.get("full_hits", 0)
+        snap = {
+            "now": now, "engine": js, "status": status, "status_note": note, "heartbeat_age": age,
+            "ring": ring, "full_hits_delta": max(0, full - self.full_prev),
+            "log": self._read_log(), "audit": self._read_audit(),
+            "db": self._read_db(js, now), "bench": self._read_bench(),
+        }
+        self.full_prev = full
+        snap["alerts"] = self.alerts.evaluate(snap)
+        if status == "RUNNING" and any(a["level"] == "CRIT" for a in snap["alerts"]):
+            snap["status"], snap["status_note"] = "DEGRADED", "critical alert active"
+        if status in ("RUNNING", "IDLE"):
+            self.hist["throughput"].append(js.get("throughput", 0))
+            self.hist["p99"].append(js.get("latency_us", {}).get("p99", 0))
+            self.hist["usage"].append(ring.get("usage", 0) * 100)
+            self.hist["db_rate"].append(snap["db"]["rate"])
+        snap["hist"] = {k: list(v) for k, v in self.hist.items()}
+        snap["alert_history"] = list(self.alerts.history)
+        return snap
+
+
+# ----------------------------------------------------------------------------
+# Page builders -> list of (text, style)      style: title ok warn crit dim norm head
+# ----------------------------------------------------------------------------
+STATUS_STYLE = {"RUNNING": "ok", "IDLE": "warn", "STOPPED": "dim", "OFFLINE": "warn",
+                "STALLED": "crit", "CRASHED": "crit", "DEGRADED": "crit"}
+LVL_STYLE = {"CRIT": "crit", "WARN": "warn", "INFO": "dim"}
+
+
+def _hdr(snap, page, width):
+    t = datetime.fromtimestamp(snap["now"]).strftime("%H:%M:%S")
+    names = ["1 Overview", "2 Performance", "3 Database", "4 Audit/Alerts"]
+    tabs = "  ".join(f"[{n}]" if i + 1 == page else f" {n} " for i, n in enumerate(names))
+    return [(f" CHRONOSMATCH  zero-copy HFT engine monitor".ljust(width - 10) + t, "title"),
+            (" " + tabs, "head")]
+
+
+def _status_line(snap):
+    e = snap["engine"]
+    st = snap["status"]
+    return [(f" ENGINE  [{st}]  {snap['status_note']}   pid {e.get('pid', '-')}   "
+             f"uptime {fdur(e.get('uptime_s'))}   heartbeat {snap['heartbeat_age']:.1f}s ago",
+             STATUS_STYLE.get(st, "norm"))]
+
+
+def _alert_lines(snap, limit):
+    al = snap["alerts"]
+    out = [(f" ALERTS ({len(al)} active)", "head")]
+    if not al:
+        out.append(("   all clear", "ok"))
+    for a in al[:limit]:
+        out.append((f"   [{a['level']}] {a['msg']}", LVL_STYLE[a["level"]]))
+    if len(al) > limit:
+        out.append((f"   ... {len(al) - limit} more (page 4)", "dim"))
+    return out
+
+
+def page_overview(snap, width, height):
+    e, r = snap["engine"], snap["ring"]
+    lat, e2e = e.get("latency_us", {}), e.get("e2e_latency_us", {})
+    u = r.get("usage", 0)
+    ustyle = "crit" if u >= USAGE_CRIT else "warn" if u >= USAGE_WARN else "ok"
+    out = _status_line(snap)
+    out += [("", "norm"), (" ORDERS", "head"),
+            (f"   processed {fi(e.get('orders_processed')):>12}   buy {fi(e.get('buy_orders')):>10}"
+             f"   sell {fi(e.get('sell_orders')):>10}", "norm"),
+            (f"   trades    {fi(e.get('trades')):>12}   partial fills {fi(e.get('partial_fills')):>8}"
+             f"   volume {fi(e.get('volume'))}", "norm"),
+            (f"   rate {fi(e.get('throughput')):>8} ord/s   peak {fi(e.get('peak_throughput'))}   "
+             f"{spark(snap['hist']['throughput'], 30)}", "norm"),
+            ("", "norm"), (" BUFFER USAGE (mmap ring)", "head"),
+            (f"   {bar(u)} {u * 100:5.1f}%   depth {fi(r.get('depth'))}/{fi(r.get('capacity'))}"
+             f"   full-hits {fi(r.get('full_hits'))}", ustyle),
+            ("", "norm"), (" LATENCY (per-order matching / queue-to-match)", "head"),
+            (f"   match  p50 {fus(lat.get('p50')):>9}  p95 {fus(lat.get('p95')):>9}  "
+             f"p99 {fus(lat.get('p99')):>9}  max {fus(lat.get('max')):>9}",
+             "crit" if lat.get("p99", 0) >= P99_CRIT_US else "warn" if lat.get("p99", 0) >= P99_WARN_US else "ok"),
+            (f"   e2e    p50 {fus(e2e.get('p50')):>9}  p95 {fus(e2e.get('p95')):>9}  "
+             f"p99 {fus(e2e.get('p99')):>9}  max {fus(e2e.get('max')):>9}", "norm"),
+            ("", "norm")]
+    out += _alert_lines(snap, 4)
+    out += [("", "norm"), (" ENGINE.LOG (latest)", "head")]
+    room = max(2, height - len(out) - 3)
+    for ln in snap["log"]["tail"][-room:]:
+        m = LOG_RE.search(ln)
+        lvl = m.group(1) if m else "INFO"
+        out.append(("   " + ln[-(width - 4):], "crit" if lvl in ("ERROR", "CRITICAL") else
+                    "warn" if lvl == "WARNING" else "dim"))
+    return out
+
+
+def page_performance(snap, width, height):
+    e, h = snap["engine"], snap["hist"]
+    lat, e2e = e.get("latency_us", {}), e.get("e2e_latency_us", {})
+    out = _status_line(snap)
+    out += [("", "norm"), (" LATENCY METRICS            avg       p50       p95       p99       max", "head")]
+    for name, d in (("match (processing)", lat), ("end-to-end (queue)", e2e)):
+        out.append((f"   {name:<19}" + "".join(f"{fus(d.get(k)):>10}" for k in ("avg", "p50", "p95", "p99", "max")), "norm"))
+    th = h["throughput"]
+    out += [("", "norm"), (" THROUGHPUT (orders/s)", "head"),
+            (f"   now {fi(e.get('throughput')):>10}   peak {fi(e.get('peak_throughput')):>10}   "
+             f"avg(last {len(th)}) {fi(sum(th) / len(th) if th else 0):>10}   min {fi(min(th) if th else 0):>9}", "norm"),
+            (f"   {spark(th, width - 6)}", "ok"),
+            ("", "norm"), (" TREND   p99 latency", "head"), (f"   {spark(h['p99'], width - 6)}", "norm"),
+            (" TREND   buffer usage %", "head"), (f"   {spark(h['usage'], width - 6)}", "norm"),
+            ("", "norm"), (" PERFORMANCE MONITOR", "head")]
+    checks = [
+        ("p99 match latency", lat.get("p99", 0) < P99_WARN_US, f"{fus(lat.get('p99'))} < {fus(P99_WARN_US)}"),
+        ("buffer below warn level", snap["ring"].get("usage", 0) < USAGE_WARN, f"{snap['ring'].get('usage', 0) * 100:.0f}% < {USAGE_WARN * 100:.0f}%"),
+        ("no order errors", not e.get("errors"), f"errors = {e.get('errors', 0)}"),
+        ("heartbeat fresh", snap["heartbeat_age"] < HEARTBEAT_STALE_S, f"{snap['heartbeat_age']:.1f}s"),
+        ("persistence keeping up", snap["db"]["lag"] <= DB_LAG_WARN, f"lag {fi(snap['db']['lag'])}"),
+    ]
+    for name, ok, detail in checks:
+        out.append((f"   [{'OK' if ok else '!!'}] {name:<26} {detail}", "ok" if ok else "warn"))
+    mem = e.get("mem_mb")
+    out.append((f"   memory {mem if mem else 'n/a (pip install psutil)'} MB   gc ticks {fi(e.get('gc_runs'))}"
+                f"   book levels bid/ask {fi(e.get('book', {}).get('bid_levels'))}/{fi(e.get('book', {}).get('ask_levels'))}", "dim"))
+    b = snap["bench"]
+    out += [("", "norm"), (" BENCHMARK STATISTICS (benchmark_report.json)", "head")]
+    runs = b.get("runs") or []
+    if not runs:
+        out.append(("   no benchmark yet - run: python teammate3_integration.py bench", "dim"))
+    else:
+        last = runs[-1]
+        ops = [r["matching_ops_per_s"] for r in runs]
+        out += [(f"   last run {last['timestamp']}   runs {len(runs)}", "norm"),
+                (f"   matching {fi(last['matching_ops_per_s'])} ops/s (best {fi(max(ops))}, avg {fi(sum(ops) / len(ops))})"
+                 f"   GC-off gain {last.get('gc_speedup_pct', 0):+.1f}%", "norm"),
+                (f"   ring push {fi(last['ring_push_per_s'])}/s   pop {fi(last['ring_pop_per_s'])}/s"
+                 f"   pipeline {fi(last['pipeline_ops_per_s'])} ord/s", "norm"),
+                (f"   bench latency p50 {fus(last['latency_us']['p50'])}  p99 {fus(last['latency_us']['p99'])}"
+                 f"   live vs bench throughput {fi(e.get('throughput'))} / {fi(last['pipeline_ops_per_s'])}", "norm")]
+    return out
+
+
+def page_database(snap, width, height):
+    db, e, au = snap["db"], snap["engine"], snap["audit"]
+    st = {"OK": "ok", "MISSING": "warn", "LOCKED": "warn"}.get(db["state"], "crit")
+    out = _status_line(snap)
+    out += [("", "norm"), (" DATABASE HEALTH  (trades.db, SQLite WAL)", "head"),
+            (f"   state [{db['state']}] {db['note']}", st),
+            (f"   size {fbytes(db['size'])}  + wal {fbytes(db['wal'])}   rows {fi(db['rows'])}   "
+             f"write rate {fi(db['rate'])} trades/s", "norm"),
+            (f"   last health check {'%.0fs ago' % db['checked_ago'] if db['checked_ago'] is not None else 'never'}"
+             f"   last flush {db['last_flush_ms']:.1f} ms   flush errors {db['flush_errors']}",
+             "crit" if db["flush_errors"] else "norm"),
+            ("", "norm"), (" TRADE PERSISTENCE", "head")]
+    eng_t = e.get("trades", 0)
+    frac = min(1.0, db["rows"] / eng_t) if eng_t else 1.0
+    out += [(f"   engine executed {fi(eng_t):>12}   written to DB {fi(db['rows']):>12}   "
+             f"pending buffer {fi(db['pending'])}", "norm"),
+            (f"   persisted {bar(frac, 24)} {frac * 100:5.1f}%   lag {fi(db['lag'])} trades",
+             "warn" if db["lag"] > DB_LAG_WARN else "ok"),
+            ("", "norm"), ("   latest trades:  id   buyer   seller   price   qty", "head")]
+    for tid, b, s, p, q, ts in db["last"]:
+        t = datetime.fromtimestamp(ts / 1e9).strftime("%H:%M:%S.%f")[:-3]
+        out.append((f"     {tid:>9} {b:>8} {s:>8} {p:>7} {q:>5}   {t}", "norm"))
+    if not db["last"]:
+        out.append(("     (no trades stored yet)", "dim"))
+    out += [("", "norm")] + _alert_lines(snap, 3)
+    return out
+
+
+def page_audit(snap, width, height):
+    au, db = snap["audit"], snap["db"]
+    consistent = au["trades"] == db["rows"]
+    out = _status_line(snap)
+    out += [("", "norm"), (" AUDIT MONITORING  (audit.log)", "head"),
+            (f"   size {fbytes(au['size'])}   lines {fi(au['lines'])}   trade records {fi(au['trades'])}"
+             f"   events {', '.join(f'{k}:{v}' for k, v in au['events'].items() if k != 'TRADE') or '-'}", "norm"),
+            (f"   audit vs database: {fi(au['trades'])} / {fi(db['rows'])}  "
+             f"{'CONSISTENT' if consistent else 'syncing / mismatch'}", "ok" if consistent else "warn"),
+            ("", "norm"), ("   latest audit lines:", "head")]
+    for ln in au["tail"]:
+        out.append(("     " + ln[:width - 6], "dim"))
+    out += [("", "norm")] + _alert_lines(snap, 5)
+    out += [("", "norm"), (" ALERT HISTORY", "head")]
+    room = max(3, height - len(out) - 3)
+    for ts, lvl, msg, kind in snap["alert_history"][:room]:
+        out.append((f"   {datetime.fromtimestamp(ts).strftime('%H:%M:%S')} {kind:<7} [{lvl}] {msg}"[:width - 2],
+                    LVL_STYLE[lvl] if kind == "RAISED" else "dim"))
+    if not snap["alert_history"]:
+        out.append(("   no alerts raised yet", "dim"))
+    return out
+
+
+PAGES = {1: page_overview, 2: page_performance, 3: page_database, 4: page_audit}
+
+
+def build_page(snap, page, width=100, height=40):
+    lines = _hdr(snap, page, width) + [("", "norm")] + PAGES[page](snap, width, height)
+    return lines
+
+
+# ----------------------------------------------------------------------------
+# Renderers
+# ----------------------------------------------------------------------------
+def render_text(snap, page=1, width=100, height=45) -> str:
+    return "\n".join(t for t, _ in build_page(snap, page, width, height))
+
+
+def _curses_main(stdscr, mon, interval, page):
+    curses.curs_set(0)
+    stdscr.timeout(100)
+    styles = {"norm": 0, "dim": curses.A_DIM, "head": curses.A_BOLD, "title": curses.A_REVERSE | curses.A_BOLD}
+    if curses.has_colors():
+        curses.start_color()
+        curses.use_default_colors()
+        for i, c in enumerate((curses.COLOR_GREEN, curses.COLOR_YELLOW, curses.COLOR_RED), 1):
+            curses.init_pair(i, c, -1)
+        styles.update(ok=curses.color_pair(1), warn=curses.color_pair(2) | curses.A_BOLD,
+                      crit=curses.color_pair(3) | curses.A_BOLD)
+    else:
+        styles.update(ok=0, warn=curses.A_BOLD, crit=curses.A_BOLD | curses.A_REVERSE)
+    snap, last, paused = mon.poll(), time.time(), False
+    while True:
+        k = stdscr.getch()
+        if k in (ord("q"), ord("Q"), 27):
+            return
+        if k in (ord("1"), ord("2"), ord("3"), ord("4")):
+            page = int(chr(k))
+        elif k in (ord("p"), ord("P")):
+            paused = not paused
+        elif k in (9, curses.KEY_RIGHT):
+            page = page % 4 + 1
+        elif k == curses.KEY_LEFT:
+            page = (page - 2) % 4 + 1
+        if not paused and time.time() - last >= interval:
+            snap, last = mon.poll(), time.time()
+        h, w = stdscr.getmaxyx()
+        stdscr.erase()
+        for i, (text, style) in enumerate(build_page(snap, page, w, h)[:h - 1]):
+            try:
+                stdscr.addnstr(i, 0, text, w - 1, styles.get(style, 0))
+            except curses.error:
+                pass
+        foot = " 1-4 pages | <- -> switch | p pause%s | q quit" % (" [PAUSED]" if paused else "")
+        try:
+            stdscr.addnstr(h - 1, 0, foot.ljust(w - 1), w - 1, curses.A_REVERSE)
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+
+def _plain_loop(mon, interval, page):
+    try:
+        while True:
+            snap = mon.poll()
+            os.system("cls" if os.name == "nt" else "clear")
+            print(render_text(snap, page, 100, 40))
+            print("\n (plain mode - Ctrl+C to quit; install windows-curses for the full UI)")
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        pass
+
+
+def run_dashboard(paths: Paths = DEFAULT_PATHS, interval: float = 0.5, page: int = 1) -> None:
+    mon = Monitor(paths)
+    if curses is None or not sys.stdout.isatty():
+        _plain_loop(mon, interval, page)
+    else:
+        curses.wrapper(_curses_main, mon, interval, page)
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description="ChronosMatch dashboard (Teammate 4)")
+    ap.add_argument("--dir", default=None)
+    ap.add_argument("--interval", type=float, default=0.5)
+    ap.add_argument("--page", type=int, default=1, choices=[1, 2, 3, 4])
+    ap.add_argument("--once", action="store_true", help="print one text snapshot and exit")
+    a = ap.parse_args()
+    pth = Paths.from_dir(a.dir) if a.dir else DEFAULT_PATHS
+    if a.once:
+        m = Monitor(pth)
+        m.poll()
+        time.sleep(1.1)
+        print(render_text(m.poll(), a.page))
+    else:
+        run_dashboard(pth, a.interval, a.page)
