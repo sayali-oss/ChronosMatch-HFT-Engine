@@ -195,3 +195,42 @@ def test_get_logs_returns_separate_list():
 
     # Internal audit records should remain unchanged
     assert logger.get_total_logs() == 1
+
+
+def test_modifying_returned_record_does_not_change_original():
+    logger = AuditLogger()
+
+    trade = {
+        "buy_order_id": 1,
+        "sell_order_id": 2,
+        "price": 100,
+        "quantity": 5
+    }
+
+    logger.log_trade(trade)
+
+    logs = logger.get_logs()
+
+    logs[0]["price"] = 999
+
+    original_logs = logger.get_logs()
+
+    assert original_logs[0]["price"] == 100
+
+
+def test_modifying_returned_log_does_not_change_internal_logs():
+    logger = AuditLogger()
+
+    logger.log_trade({
+        "buy_order_id": 1,
+        "sell_order_id": 2,
+        "price": 100,
+        "quantity": 5
+    })
+
+    logs = logger.get_logs()
+
+    logs.clear()
+
+    assert logger.get_total_logs() == 1
+    assert len(logger.get_logs()) == 1
