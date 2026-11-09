@@ -234,3 +234,65 @@ def test_modifying_returned_log_does_not_change_internal_logs():
 
     assert logger.get_total_logs() == 1
     assert len(logger.get_logs()) == 1
+
+
+
+def test_trade_summary_calculates_correct_values():
+    logger = AuditLogger()
+
+    logger.log_trade({
+        "buy_order_id": 1,
+        "sell_order_id": 2,
+        "price": 100,
+        "quantity": 5
+    })
+
+    logger.log_trade({
+        "buy_order_id": 3,
+        "sell_order_id": 4,
+        "price": 200,
+        "quantity": 3
+    })
+
+    logger.log_trade({
+        "buy_order_id": 5,
+        "sell_order_id": 6,
+        "price": 150,
+        "quantity": 2
+    })
+
+    summary = logger.generate_trade_summary()
+
+    assert summary["total_trades"] == 3
+    assert summary["total_quantity"] == 10
+    assert summary["total_trade_value"] == 1400
+    assert summary["average_execution_price"] == 140
+
+
+def test_trade_summary_handles_empty_logs():
+    logger = AuditLogger()
+
+    summary = logger.generate_trade_summary()
+
+    assert summary["total_trades"] == 0
+    assert summary["total_quantity"] == 0
+    assert summary["total_trade_value"] == 0
+    assert summary["average_execution_price"] == 0
+
+
+def test_trade_summary_after_partial_execution():
+    logger = AuditLogger()
+
+    logger.log_trade({
+        "buy_order_id": 1,
+        "sell_order_id": 2,
+        "price": 125,
+        "quantity": 4
+    })
+
+    summary = logger.generate_trade_summary()
+
+    assert summary["total_trades"] == 1
+    assert summary["total_quantity"] == 4
+    assert summary["total_trade_value"] == 500
+    assert summary["average_execution_price"] == 125

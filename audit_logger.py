@@ -7,6 +7,33 @@ import copy
 
 class AuditLogger:
     """Stores and exports audit records for executed trades."""
+    
+    def generate_trade_summary(self):
+        """Generate summary statistics for executed trades."""
+
+        total_trades = len(self.audit_logs)
+
+        total_quantity = sum(
+            log["quantity"] for log in self.audit_logs
+        )
+
+        total_trade_value = sum(
+            log["price"] * log["quantity"]
+            for log in self.audit_logs
+        )
+
+        average_execution_price = (
+            total_trade_value / total_quantity
+            if total_quantity > 0
+            else 0
+        )
+
+        return {
+            "total_trades": total_trades,
+            "total_quantity": total_quantity,
+            "total_trade_value": total_trade_value,
+            "average_execution_price": average_execution_price
+        }
 
     def __init__(self):
         self.audit_logs = []
