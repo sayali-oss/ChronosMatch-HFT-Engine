@@ -2,6 +2,7 @@
 import csv
 from datetime import datetime, timezone
 from pathlib import Path
+import copy
 
 
 class AuditLogger:
@@ -68,8 +69,8 @@ class AuditLogger:
         return new_records
 
     def get_logs(self):
-        """Return all audit records."""
-        return self.audit_logs.copy()
+        """Return a deep copy of all audit records."""
+        return copy.deepcopy(self.audit_logs)
 
     def get_total_logs(self):
         """Return the total number of audit records."""
