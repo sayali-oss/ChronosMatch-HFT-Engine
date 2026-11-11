@@ -1,0 +1,346 @@
+"""ChronosMatch - Order Book (Teammate 3)
+Combined Day 1-10 reference implementation.
+
+Day 1: Basic order-book structure.
+Day 2: Insert buy/sell orders with validation.
+Day 3: Retrieve orders and look up an order by ID.
+Day 4: Cancel orders and inspect best bid/ask prices.
+Day 5: Ingest firehose events into the order book.
+Day 6: Ingest from an async firehose; fast lookup by order ID.
+Day 7: Tests for order insertion (see test_day7_insertion.py).
+Day 8: Validate matched trades against the order book.
+Day 9: Stress tests with 10K+ orders (see test_day9_stress.py).
+       Cancel is O(1); best bid/ask use heaps, so big books stay fast.
+Day 10: get_orders_in_arrival_order() hands the whole book to a matching engine
+       in the exact order the orders arrived (see test_day10_integration.py).
+
+This is a storage/order-book module, not a full trade-matching engine.
+Trade validation only CHECKS trades; it never changes the book.
+"""
+
+import heapq
+import math
+from collections.abc import AsyncIterable, Iterable, Mapping
+from dataclasses import dataclass
+from itertools import count
+from typing import Optional
+
+BUY = "B"
+SELL = "S"
+
+
+@dataclass(frozen=True)
+class Order:
+    order_id: str
+    side: str
+    price: float
+    quantity: int
+
+
+class OrderBook:
+    def __init__(self) -> None:
+        # Day 1: Store buy and sell orders separately. Dicts keep arrival
+        # order and make cancelling O(1) (Day 9).
+        self._buys: dict[str, Order] = {}
+        self._sells: dict[str, Order] = {}
+        # Day 6: order_id -> Order, so lookups and duplicate checks are instant.
+        self._by_id: dict[str, Order] = {}
+        # Day 9: heaps for best bid/ask. Entries are (sort price, seq, order);
+        # cancelled orders are dropped lazily when they reach the top.
+        self._bid_heap: list[tuple[float, int, Order]] = []
+        self._ask_heap: list[tuple[float, int, Order]] = []
+        self._seq_by_id: dict[str, int] = {}
+        self._next_seq = count()
+
+    @property
+    def buys(self) -> list[Order]:
+        """Buy orders in arrival order (a copy)."""
+        return list(self._buys.values())
+
+    @property
+    def sells(self) -> list[Order]:
+        """Sell orders in arrival order (a copy)."""
+        return list(self._sells.values())
+
+    def add_order(self, order: Order) -> None:
+        """Day 2: Validate and insert a buy or sell order."""
+        if not isinstance(order.order_id, str) or not order.order_id.strip():
+            raise ValueError("Order ID cannot be empty")
+        if order.side not in (BUY, SELL):
+            raise ValueError("Side must be 'B' (buy) or 'S' (sell)")
+        if isinstance(order.price, bool) or not isinstance(order.price, (int, float)):
+            raise ValueError("Price must be a number")
+        if not math.isfinite(order.price):
+            raise ValueError("Price must be finite")
+        if order.price <= 0:
+            raise ValueError("Price must be positive")
+        if isinstance(order.quantity, bool) or not isinstance(order.quantity, int):
+            raise ValueError("Quantity must be an integer")
+        if order.quantity <= 0:
+            raise ValueError("Quantity must be positive")
+        if order.order_id in self._by_id:
+            raise ValueError(f"Duplicate order ID: {order.order_id}")
+
+        seq = next(self._next_seq)
+        if order.side == BUY:
+            self._buys[order.order_id] = order
+            heapq.heappush(self._bid_heap, (-order.price, seq, order))
+        else:
+            self._sells[order.order_id] = order
+            heapq.heappush(self._ask_heap, (order.price, seq, order))
+        self._by_id[order.order_id] = order
+        self._seq_by_id[order.order_id] = seq
+
+    def ingest_firehose(self, events: Iterable[Mapping[str, object]]) -> int:
+        """Add firehose events with order_id, side, price, and quantity fields.
+
+        Events are inserted one at a time. If an event is bad, a ValueError
+        (or TypeError for a non-mapping event) is raised and the events
+        before it stay in the book.
+        """
+        ingested = 0
+        for event_number, event in enumerate(events, start=1):
+            if not isinstance(event, Mapping):
+                raise TypeError(f"Firehose event {event_number} must be a mapping")
+
+            try:
+                order_id = event["order_id"]
+                side = event["side"]
+                price = event["price"]
+                quantity = event["quantity"]
+            except KeyError as exc:
+                raise ValueError(
+                    f"Firehose event {event_number} is missing field {exc.args[0]!r}"
+                ) from exc
+
+            if not isinstance(order_id, str):
+                raise ValueError(
+                    f"Firehose event {event_number} order_id must be a string"
+                )
+            if not isinstance(side, str):
+                raise ValueError(
+                    f"Firehose event {event_number} side must be a string"
+                )
+            if isinstance(price, bool) or not isinstance(price, (int, float)):
+                raise ValueError(
+                    f"Firehose event {event_number} price must be a number"
+                )
+            if isinstance(quantity, bool) or not isinstance(quantity, int):
+                raise ValueError(
+                    f"Firehose event {event_number} quantity must be an integer"
+                )
+
+            order = Order(order_id, side, float(price), quantity)
+            try:
+                self.add_order(order)
+            except ValueError as exc:
+                raise ValueError(f"Firehose event {event_number}: {exc}") from exc
+            ingested += 1
+
+        return ingested
+
+    async def ingest_async(
+        self, async_events: AsyncIterable[Mapping[str, object]]
+    ) -> int:
+        """Day 6: Collect events from an async firehose, then ingest them."""
+        batch = [event async for event in async_events]
+        return self.ingest_firehose(batch)
+
+    def get_orders(self, side: str) -> list[Order]:
+        """Day 3: Return a copy of orders for the requested side."""
+        if side == BUY:
+            return list(self._buys.values())
+        if side == SELL:
+            return list(self._sells.values())
+        raise ValueError("Side must be 'B' (buy) or 'S' (sell)")
+
+    def get_all_orders(self) -> list[Order]:
+        """Return all buy orders followed by all sell orders."""
+        return self.get_orders(BUY) + self.get_orders(SELL)
+
+    def get_orders_in_arrival_order(self) -> list[Order]:
+        """Day 10: Return every order, buys and sells mixed, oldest first.
+
+        A matching engine needs this order for price-time priority. (The
+        separate buy and sell dictionaries only know the order within a side.)
+        An id that is cancelled and then used again counts as a new arrival."""
+        return list(self._by_id.values())
+
+    def get_order(self, order_id: str) -> Optional[Order]:
+        """Return one order by ID, or None if it does not exist."""
+        return self._by_id.get(order_id)
+
+    def cancel_order(self, order_id: str) -> bool:
+        """Day 4: Remove an order by ID. Return True if it was found."""
+        order = self._by_id.pop(order_id, None)
+        if order is None:
+            return False
+        self._seq_by_id.pop(order_id, None)
+        if order.side == BUY:
+            del self._buys[order_id]
+            self._compact(self._bid_heap, self._buys, BUY)
+        else:
+            del self._sells[order_id]
+            self._compact(self._ask_heap, self._sells, SELL)
+        return True
+
+    def _compact(self, heap, live: dict, side: str) -> None:
+        """Rebuild a heap when it holds far more dead entries than live orders."""
+        if len(heap) <= 2 * len(live) + 64:
+            return
+        heap.clear()
+        for order in live.values():                  # dict order = arrival order
+            seq = next(self._next_seq)
+            self._seq_by_id[order.order_id] = seq
+            key = -order.price if side == BUY else order.price
+            heap.append((key, seq, order))
+        heapq.heapify(heap)
+
+    def _top(self, heap) -> Optional[Order]:
+        """Return the best live order in a heap, discarding dead entries."""
+        while heap:
+            _, seq, order = heap[0]
+            if self._seq_by_id.get(order.order_id) == seq:
+                return order
+            heapq.heappop(heap)
+        return None
+
+    def best_bid(self) -> Optional[Order]:
+        """Day 4: Return the highest-priced buy order, or None.
+
+        Ties go to the order that arrived first.
+        """
+        return self._top(self._bid_heap)
+
+    def best_ask(self) -> Optional[Order]:
+        """Day 4: Return the lowest-priced sell order, or None.
+
+        Ties go to the order that arrived first.
+        """
+        return self._top(self._ask_heap)
+
+    def snapshot(self) -> dict[str, list[Order]]:
+        """Return a simple snapshot for display/integration."""
+        return {"buys": self.get_orders(BUY), "sells": self.get_orders(SELL)}
+
+    def __len__(self) -> int:
+        return len(self._buys) + len(self._sells)
+
+
+# ---------------------------------------------------------------
+# Day 8: Trade validation
+# ---------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Trade:
+    trade_id: str
+    buy_order_id: str
+    sell_order_id: str
+    price: float
+    quantity: int
+
+
+def check_trades(book: OrderBook, trades: Iterable[Trade]) -> list[str]:
+    """Return a list of problems found. An empty list means all trades are valid.
+
+    Rules checked for every trade:
+      - trade_id is a non-empty string and unique within the batch
+      - price is a finite, positive number; quantity is a positive integer
+      - both order IDs exist in the book, the buy ID is a buy order and the
+        sell ID is a sell order
+      - the orders cross: buy limit price >= sell limit price
+      - the trade price lies between the sell and buy limit prices
+      - total quantity traded per order, across the batch, never exceeds the
+        order's quantity (no overfills)
+
+    Trades with a problem do not count toward the overfill totals.
+    """
+    problems: list[str] = []
+    seen_ids: set[str] = set()
+    filled: dict[str, int] = {}
+
+    for n, trade in enumerate(trades, start=1):
+        errors: list[str] = []
+
+        # --- trade id ---
+        if not isinstance(trade.trade_id, str) or not trade.trade_id.strip():
+            errors.append("trade ID cannot be empty")
+        elif trade.trade_id in seen_ids:
+            errors.append(f"duplicate trade ID {trade.trade_id!r}")
+        if isinstance(trade.trade_id, str):
+            seen_ids.add(trade.trade_id)
+
+        # --- price and quantity ---
+        price_ok = (
+            not isinstance(trade.price, bool)
+            and isinstance(trade.price, (int, float))
+            and math.isfinite(trade.price)
+            and trade.price > 0
+        )
+        if not price_ok:
+            errors.append("price must be a finite positive number")
+
+        qty_ok = (
+            not isinstance(trade.quantity, bool)
+            and isinstance(trade.quantity, int)
+            and trade.quantity > 0
+        )
+        if not qty_ok:
+            errors.append("quantity must be a positive integer")
+
+        # --- orders ---
+        buy = book.get_order(trade.buy_order_id) if isinstance(trade.buy_order_id, str) else None
+        sell = book.get_order(trade.sell_order_id) if isinstance(trade.sell_order_id, str) else None
+
+        if buy is None:
+            errors.append(f"buy order {trade.buy_order_id!r} not found")
+        elif buy.side != BUY:
+            errors.append(f"order {buy.order_id!r} is not a buy order")
+            buy = None
+
+        if sell is None:
+            errors.append(f"sell order {trade.sell_order_id!r} not found")
+        elif sell.side != SELL:
+            errors.append(f"order {sell.order_id!r} is not a sell order")
+            sell = None
+
+        # --- price relationships ---
+        if buy is not None and sell is not None:
+            if buy.price < sell.price:
+                errors.append(
+                    f"orders do not cross (buy {buy.price} < sell {sell.price})"
+                )
+            elif price_ok and not (sell.price <= trade.price <= buy.price):
+                errors.append(
+                    f"trade price {trade.price} outside "
+                    f"[{sell.price}, {buy.price}]"
+                )
+
+        # --- overfill ---
+        if qty_ok:
+            for order in (buy, sell):
+                if order is None:
+                    continue
+                total = filled.get(order.order_id, 0) + trade.quantity
+                if total > order.quantity:
+                    errors.append(
+                        f"order {order.order_id!r} overfilled "
+                        f"({total} > {order.quantity})"
+                    )
+
+        if errors:
+            problems.extend(f"Trade {n}: {e}" for e in errors)
+        else:
+            filled[buy.order_id] = filled.get(buy.order_id, 0) + trade.quantity
+            filled[sell.order_id] = filled.get(sell.order_id, 0) + trade.quantity
+
+    return problems
+
+
+def validate_trades(book: OrderBook, trades: Iterable[Trade]) -> int:
+    """Raise ValueError listing every problem, or return the number of valid trades."""
+    trades = list(trades)
+    problems = check_trades(book, trades)
+    if problems:
+        raise ValueError("; ".join(problems))
+    return len(trades)
